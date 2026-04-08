@@ -673,7 +673,7 @@ const PLANET_COLORS = [
   { bg: 'linear-gradient(135deg, #3b82f6, #2563eb)', glow: 'rgba(59,130,246,0.4)' },
 ];
 
-function checkConditions(person, slot) {
+function checkConditions(person, slot, allData) {
   const checks = [];
   let blocked = false; // ถูกบล็อกไม่ให้ย้าย
 
@@ -781,6 +781,68 @@ function checkConditions(person, slot) {
     checks.push({ label: 'อายุยศ', req: '>= 2 ปี', val: person.years_in_rank + ' ปี', pass });
   }
 
+  // ═══ 7. ตรวจเหล่า (corps) — ลชท.หลัก/ลชท.รอง ต้องตรงกับเหล่าที่ตำแหน่งต้องการ ═══
+  if (allData) {
+    const sectionCorps = inferPositionCorps(slot, allData);
+    if (sectionCorps && sectionCorps.length > 0) {
+      // ใช้เหล่าที่พบมากสุดในหน่วย เป็นเหล่าหลักของตำแหน่ง
+      const topCorps = sectionCorps[0][0];
+      const totalInSection = sectionCorps.reduce((s, [, c]) => s + c, 0);
+      const topCount = sectionCorps[0][1];
+      const dominance = topCount / totalInSection;
+
+      // ถ้าเหล่าหลักมีสัดส่วน >= 40% ของหน่วย ถือว่ากำหนดเหล่า
+      if (dominance >= 0.4 && topCount >= 2) {
+        const result = checkCorpsMatch(person, topCorps);
+        // รวมเหล่าที่ยอมรับ (top 2 ถ้ามีสัดส่วนใกล้กัน)
+        let accepted = topCorps;
+        if (sectionCorps.length > 1) {
+          const secondCorps = sectionCorps[1][0];
+          const secondCount = sectionCorps[1][1];
+          if (secondCount / totalInSection >= 0.2) {
+            const result2 = checkCorpsMatch(person, secondCorps);
+            if (result2.pass) {
+              checks.push({
+                label: 'เหล่า',
+                req: `${topCorps} หรือ ${secondCorps}`,
+                val: `${person.corps || '-'} (${result2.reason})`,
+                pass: true,
+              });
+            } else if (result.pass) {
+              checks.push({
+                label: 'เหล่า',
+                req: `${topCorps} หรือ ${secondCorps}`,
+                val: `${person.corps || '-'} (${result.reason})`,
+                pass: true,
+              });
+            } else {
+              checks.push({
+                label: 'เหล่า',
+                req: `${topCorps} หรือ ${secondCorps}`,
+                val: `${person.corps || '-'}`,
+                pass: false,
+              });
+            }
+          } else {
+            checks.push({
+              label: 'เหล่า',
+              req: topCorps,
+              val: `${person.corps || '-'}${result.pass ? ' (' + result.reason + ')' : ''}`,
+              pass: result.pass,
+            });
+          }
+        } else {
+          checks.push({
+            label: 'เหล่า',
+            req: topCorps,
+            val: `${person.corps || '-'}${result.pass ? ' (' + result.reason + ')' : ''}`,
+            pass: result.pass,
+          });
+        }
+      }
+    }
+  }
+
   const allPass = checks.length === 0 || checks.every(c => c.pass);
   const passCount = checks.filter(c => c.pass).length;
   const totalChecks = checks.length;
@@ -788,6 +850,105 @@ function checkConditions(person, slot) {
 }
 
 // หาผู้มีคุณสมบัติเหมาะสมกับตำแหน่งว่าง
+// ══════════════════════════════════════════════════════
+//  CORPS / เหล่า MATCHING SYSTEM
+// ══════════════════════════════════════════════════════
+
+// สร้าง mapping เหล่า -> ลชท. จากข้อมูลจริง (position_detail ของคนที่บรรจุ)
+let _corpsLchtCache = null;
+let _sectionCorpsCache = null;
+
+function buildCorpsMap(allData) {
+  if (_corpsLchtCache) return;
+  const corpsLcht = {};   // corps -> Set of lcht codes
+  const sectionCorps = {}; // section(8-digit) -> { corps: count }
+
+  for (const d of allData) {
+    if (!d.name) continue;
+    const corps = d.corps || '';
+    const pc = String(d.pos_code || '').substring(0, 8);
+
+    // สร้าง section -> corps mapping
+    if (corps && pc) {
+      if (!sectionCorps[pc]) sectionCorps[pc] = {};
+      sectionCorps[pc][corps] = (sectionCorps[pc][corps] || 0) + 1;
+    }
+
+    // สร้าง corps -> lcht mapping จาก position_detail
+    const pd = d.position_detail || '';
+    if (!corps || !pd) continue;
+
+    // parse ลชท.หลัก
+    const mainMatch = pd.match(/ลชท\.หลัก\s*(?:สธ\.)?\s*(\d+)/);
+    if (mainMatch) {
+      if (!corpsLcht[corps]) corpsLcht[corps] = new Set();
+      corpsLcht[corps].add(mainMatch[1]);
+    }
+
+    // parse ลชท.รอง
+    const subMatch = pd.match(/ลชท\.รอง\s+([\d,]+)/);
+    if (subMatch) {
+      for (const code of subMatch[1].split(',')) {
+        const c = code.trim();
+        if (c && c !== '-') {
+          if (!corpsLcht[corps]) corpsLcht[corps] = new Set();
+          corpsLcht[corps].add(c);
+        }
+      }
+    }
+  }
+
+  // Convert Sets to Arrays
+  _corpsLchtCache = {};
+  for (const [corps, codes] of Object.entries(corpsLcht)) {
+    _corpsLchtCache[corps] = [...codes];
+  }
+  _sectionCorpsCache = sectionCorps;
+}
+
+// หาเหล่าที่ตำแหน่งต้องการ จาก section ที่ตำแหน่งอยู่
+function inferPositionCorps(slot, allData) {
+  buildCorpsMap(allData);
+  const pc = String(slot.pos_code || '').substring(0, 8);
+  const sCorps = _sectionCorpsCache[pc];
+  if (!sCorps) return null;
+  // เรียงตาม count มากสุด
+  const sorted = Object.entries(sCorps).sort((a, b) => b[1] - a[1]);
+  return sorted; // [[corps, count], ...]
+}
+
+// ตรวจว่าคนมี ลชท. ตรงกับเหล่าที่ต้องการไหม
+function checkCorpsMatch(person, requiredCorps) {
+  // 1. ตรวจเหล่าโดยตรง
+  if (person.corps === requiredCorps) return { pass: true, reason: `เหล่า ${person.corps} ตรง` };
+
+  // 2. ตรวจ ลชท.หลัก ว่าอยู่ในเหล่าที่ต้องการไหม
+  if (_corpsLchtCache && person.lcht_main) {
+    const requiredLchts = _corpsLchtCache[requiredCorps] || [];
+    const personLcht = String(Math.floor(person.lcht_main));
+    // ตรวจ ลชท.หลัก ตรงกับเหล่า
+    if (requiredLchts.includes(personLcht) || requiredLchts.includes('0' + personLcht)) {
+      return { pass: true, reason: `ลชท.หลัก ${personLcht} อยู่ในเหล่า ${requiredCorps}` };
+    }
+  }
+
+  // 3. ตรวจ ลชท.รอง จาก position_detail ของคน
+  if (person.position_detail && _corpsLchtCache) {
+    const subMatch = person.position_detail.match(/ลชท\.รอง\s+([\d,]+)/);
+    if (subMatch) {
+      const requiredLchts = _corpsLchtCache[requiredCorps] || [];
+      for (const code of subMatch[1].split(',')) {
+        const c = code.trim();
+        if (c && requiredLchts.includes(c)) {
+          return { pass: true, reason: `ลชท.รอง ${c} อยู่ในเหล่า ${requiredCorps}` };
+        }
+      }
+    }
+  }
+
+  return { pass: false, reason: `ไม่มี ลชท. ตรงกับเหล่า ${requiredCorps}` };
+}
+
 // คำนวณอายุตัว (ปี พ.ศ. ปัจจุบัน - ปีเกิด)
 const CURRENT_BE = new Date().getFullYear() + 543;
 function calcAge(birthBe) { return birthBe ? CURRENT_BE - birthBe : 0; }
@@ -808,7 +969,7 @@ function findEligibleCandidates(slot, allData) {
     (d.status === 1 || d.status === 7 || d.status === 5) && d.name && d.id !== slot.id
   );
   return people.map(person => {
-    const result = checkConditions(person, slot);
+    const result = checkConditions(person, slot, allData);
     const seniority = seniorityScore(person);
     return { ...person, condResult: result, seniority };
   }).sort((a, b) => {
@@ -905,7 +1066,7 @@ function SpaceFormationView({ data, onDataChange, onSelect, addToast }) {
       return;
     }
     // Check conditions
-    const { checks, allPass } = checkConditions(dragPerson, hoverSlot);
+    const { checks, allPass } = checkConditions(dragPerson, hoverSlot, data);
 
     if (checks.length > 0) {
       setCondPopup({ person: dragPerson, slot: hoverSlot, checks, allPass, x: e.clientX, y: e.clientY });
@@ -1023,7 +1184,7 @@ function SpaceFormationView({ data, onDataChange, onSelect, addToast }) {
                 ${p.vacantSlots.map((slot, oi) => {
                   const pos = getOrbitPos({ x: 0, y: 0 }, p.filledPeople.length + oi, Math.min(allOrbit.length, 8), orbitR);
                   const isHover = hoverSlot?.id === slot.id;
-                  const cond = isHover && dragPerson ? checkConditions(dragPerson, slot) : null;
+                  const cond = isHover && dragPerson ? checkConditions(dragPerson, slot, data) : null;
                   return html`
                     <div key=${slot.id}
                       class="orbit-slot ${isHover ? (cond?.allPass !== false ? 'drop-hover' : 'drop-invalid') : ''}"
@@ -1307,7 +1468,7 @@ function TransferPrepView({ data, onSelect, addToast }) {
 
   // จำลองการย้าย
   const addSimulation = useCallback((person, slot) => {
-    const result = checkConditions(person, slot);
+    const result = checkConditions(person, slot, data);
     setSimulations(prev => [...prev, {
       id: Date.now(),
       person,
@@ -1486,7 +1647,7 @@ function TransferPrepView({ data, onSelect, addToast }) {
                           <div class="tp-cand-info">
                             <div class="tp-cand-name">${person.name || '-'}</div>
                             <div class="tp-cand-meta">
-                              ${person.rank_req || '-'} | ${person.branch || '-'} | ${person.origin || '-'}
+                              ${person.rank_req || '-'} | ${person.corps ? 'เหล่า ' + person.corps : '-'} | ${person.origin || '-'}
                             </div>
                             <div class="tp-cand-seniority">
                               <span title="อายุตัว">อายุ ${age || '-'}ปี</span>
