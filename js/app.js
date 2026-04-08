@@ -42,6 +42,79 @@ const LEVEL_GROUPS = [
 const PER_PAGE = 30;
 
 // ══════════════════════════════════════════════════════
+//  TRANSFER RULES (จากอัตราหมายเลข 1310)
+// ══════════════════════════════════════════════════════
+
+// ชั้นยศที่อนุญาตตามตำแหน่ง
+const RANK_GROUPS = {
+  general: ['พล.อ.', 'พล.ท.', 'พล.ต.', 'พล.ร.อ.', 'พล.ร.ท.', 'พล.ร.ต.', 'พล.อ.อ.', 'พล.อ.ท.', 'พล.อ.ต.'],
+  seniorOfficer: ['พ.อ.(พ)', 'พ.อ.', 'น.อ.'],
+  officer: ['พ.ท.', 'พ.ต.', 'น.ท.', 'น.ต.', 'ร.อ.', 'ร.ท.', 'ร.ต.'],
+  nco: ['จ.ส.อ.(พ)', 'จ.ส.อ.', 'จ.ส.ท.', 'จ.ส.ต.', 'ส.อ.', 'ส.ท.', 'ส.ต.'],
+};
+
+// เงื่อนไขตำแหน่งจากอัตราหมายเลข 1310 ตอนที่ 5
+const TRANSFER_RULES = [
+  {
+    id: 'R01',
+    name: 'เจ้ากรม/ผอ.สำนัก',
+    desc: 'ต้องเป็นนายทหารสัญญาบัตร สายงาน สธ. ชั้น พล.ต. ขึ้นไป',
+    match: (p) => p.level === 3 || p.level === 4,
+    conditions: [
+      { label: 'ชั้นยศ', check: (person) => RANK_GROUPS.general.includes(person.rank_req), req: 'นายพล' },
+      { label: 'สายงาน', check: (person) => person.branch === 'สธ.', req: 'สธ.' },
+      { label: 'ที่มา', check: (person) => ['นร.', 'นนร.', 'นนอ.', 'นนต.'].includes(person.origin), req: 'นร./นนร./นนอ./นนต.' },
+    ],
+  },
+  {
+    id: 'R02',
+    name: 'ฝ่ายเสนาธิการ (สัญญาบัตร ชั้นสูง)',
+    desc: 'ต้องสำเร็จ รร.เสนาธิการ หรือ วิทยาลัยการทัพ',
+    match: (p) => p.level === 5 || p.level === 6,
+    conditions: [
+      { label: 'ชั้นยศ', check: (person) => [...RANK_GROUPS.seniorOfficer].includes(person.rank_req), req: 'พ.อ.(พ)/พ.อ./น.อ.' },
+      { label: 'การศึกษา', check: (person) => person.education && ['ปริญญาตรี', 'ปริญญาโท', 'ปริญญาเอก'].includes(person.education), req: 'ปริญญาตรีขึ้นไป' },
+    ],
+  },
+  {
+    id: 'R03',
+    name: 'นปก.ประจำ ยก.ทหาร',
+    desc: 'บรรจุทดแทนตำแหน่ง 99 ในด้านต่างๆ (วิจัย, ฝึกอบรม, ยุทธศาสตร์)',
+    match: (p) => (p.position || '').includes('นปก.ประจำ'),
+    conditions: [
+      { label: 'ชั้นยศ', check: (person) => person.rank_req === 'พ.อ.(พ)' || person.rank_req === 'น.อ.', req: 'พ.อ.(พ)/น.อ.' },
+      { label: 'ลชท.หลัก', check: (person) => person.lcht_main === 916 || person.lcht_main === 1116, req: '916 หรือ 1116' },
+    ],
+  },
+  {
+    id: 'R04',
+    name: 'ปฏิบัติการ (สัญญาบัตร)',
+    desc: 'นายทหารสัญญาบัตร ชั้น พ.ท.-ร.ต.',
+    match: (p) => [7, 8, 9, 10].includes(p.level),
+    conditions: [
+      { label: 'ชั้นยศ', check: (person) => RANK_GROUPS.officer.includes(person.rank_req), req: 'พ.ท.-ร.ต.' },
+    ],
+  },
+  {
+    id: 'R05',
+    name: 'ปฏิบัติการ (ประทวน)',
+    desc: 'นายทหารประทวน จ.ส.อ. ขึ้นไป',
+    match: (p) => [19, 21, 22, 25, 29].includes(p.level),
+    conditions: [
+      { label: 'ชั้นยศ', check: (person) => RANK_GROUPS.nco.includes(person.rank_req), req: 'จ.ส.อ. ขึ้นไป' },
+    ],
+  },
+];
+
+// หมวดหมู่ นปก.ประจำ ด้านต่างๆ (ตอนที่ 5 ข้อ ๕.๔)
+const NPK_CATEGORIES = [
+  'ด้านการวิจัย', 'ด้านการวิเคราะห์', 'ด้านการฝึกอบรม', 'ด้านการเรียบเรียงตำรา',
+  'ด้านวิจัยยุทธศาสตร์', 'ด้านวิชาการ', 'ด้านวิชาการศึกษา', 'ด้านวิชาการทั่วไป',
+  'ด้านโครงการ', 'ด้านการบริหารจัดการ', 'ด้านเลขานุการ', 'ด้านธุรการ',
+  'ด้านบริการกำลังพล', 'ด้านวิชาการพิเศษ', 'ด้านกิจการพิเศษ',
+];
+
+// ══════════════════════════════════════════════════════
 //  DEMO DATA
 // ══════════════════════════════════════════════════════
 
@@ -602,20 +675,23 @@ const PLANET_COLORS = [
 
 function checkConditions(person, slot) {
   const checks = [];
-  // ตรวจชั้นยศ
+
+  // 1. ตรวจชั้นยศ (อ้างอิงอัตราหมายเลข 1310)
   if (slot.rank_req && person.rank_req) {
     const slotRank = RANK_ORDER[slot.rank_req] || 99;
-    const personRank = RANK_ORDER[person.rank_req?.replace(/^.*?\s/, '')] || 99;
-    // ยอมรับยศใกล้เคียง (+-2)
+    const personRankClean = (person.rank_req || '').replace(/^.*?\s/, '');
+    const personRank = RANK_ORDER[personRankClean] || 99;
     const pass = Math.abs(slotRank - personRank) <= 2;
     checks.push({ label: 'ชั้นยศ', req: slot.rank_req, val: person.rank_req || '-', pass });
   }
-  // ตรวจสายงาน
+
+  // 2. ตรวจสายงาน
   if (slot.branch && slot.branch !== '*') {
-    const pass = !person.branch || person.branch === slot.branch || slot.branch === '*';
+    const pass = !person.branch || person.branch === slot.branch;
     checks.push({ label: 'สายงาน', req: slot.branch, val: person.branch || '-', pass: pass || !person.branch });
   }
-  // ตรวจ ลชท.
+
+  // 3. ตรวจ ลชท.หลัก
   if (slot.position_detail) {
     const lchtMatch = slot.position_detail.match(/ลชท\.หลัก\s*(?:สธ\.)?(\d+)/);
     if (lchtMatch && person.lcht_main) {
@@ -623,8 +699,58 @@ function checkConditions(person, slot) {
       checks.push({ label: 'ลชท.หลัก', req: lchtMatch[1], val: String(person.lcht_main), pass });
     }
   }
+
+  // 4. ตรวจเงื่อนไขตามอัตราหมายเลข 1310
+  const rule = TRANSFER_RULES.find(r => r.match(slot));
+  if (rule) {
+    for (const cond of rule.conditions) {
+      // ข้ามถ้าตรวจชั้นยศ/สายงานไปแล้ว
+      if (cond.label === 'ชั้นยศ' && checks.some(c => c.label === 'ชั้นยศ')) continue;
+      if (cond.label === 'สายงาน' && checks.some(c => c.label === 'สายงาน')) continue;
+      const pass = cond.check(person);
+      checks.push({
+        label: cond.label + ' (อัตรา 1310)',
+        req: cond.req,
+        val: person[cond.label === 'ชั้นยศ' ? 'rank_req' : cond.label === 'สายงาน' ? 'branch' : cond.label === 'ที่มา' ? 'origin' : cond.label === 'การศึกษา' ? 'education' : cond.label === 'ลชท.หลัก' ? 'lcht_main' : '-'] || '-',
+        pass,
+        ruleId: rule.id,
+        ruleName: rule.name,
+      });
+    }
+  }
+
+  // 5. ตรวจอายุราชการ (ถ้าตำแหน่งระดับ 3-4 ต้องมีอายุราชการ >= 25 ปี)
+  if (slot.level <= 4 && person.years_service != null) {
+    const pass = person.years_service >= 25;
+    checks.push({ label: 'อายุราชการ', req: '>= 25 ปี', val: person.years_service + ' ปี', pass });
+  }
+
+  // 6. ตรวจอายุยศ (ถ้าตำแหน่งระดับ 3-4 ต้องมีอายุยศ >= 2 ปี)
+  if (slot.level <= 4 && person.years_in_rank != null) {
+    const pass = person.years_in_rank >= 2;
+    checks.push({ label: 'อายุยศ', req: '>= 2 ปี', val: person.years_in_rank + ' ปี', pass });
+  }
+
   const allPass = checks.length === 0 || checks.every(c => c.pass);
-  return { checks, allPass };
+  const passCount = checks.filter(c => c.pass).length;
+  const totalChecks = checks.length;
+  return { checks, allPass, passCount, totalChecks, rule };
+}
+
+// หาผู้มีคุณสมบัติเหมาะสมกับตำแหน่งว่าง
+function findEligibleCandidates(slot, allData) {
+  // ค้นหาเฉพาะคนที่มีตัวตน (บรรจุจริง/ประจำ/รรก.)
+  const people = allData.filter(d =>
+    (d.status === 1 || d.status === 7 || d.status === 5) && d.name && d.id !== slot.id
+  );
+  return people.map(person => {
+    const result = checkConditions(person, slot);
+    return { ...person, condResult: result };
+  }).sort((a, b) => {
+    // เรียงตาม: ผ่านทั้งหมด > ผ่านมากกว่า > ผ่านน้อยกว่า
+    if (b.condResult.allPass !== a.condResult.allPass) return b.condResult.allPass ? 1 : -1;
+    return b.condResult.passCount - a.condResult.passCount;
+  });
 }
 
 function SpaceFormationView({ data, onDataChange, onSelect, addToast }) {
@@ -1057,6 +1183,291 @@ function ConditionView({ data, onSelect }) {
 }
 
 // ══════════════════════════════════════════════════════
+//  TRANSFER PREPARATION VIEW (เตรียมปรับย้าย)
+// ══════════════════════════════════════════════════════
+
+function TransferPrepView({ data, onSelect, addToast }) {
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [candidates, setCandidates] = useState([]);
+  const [filterDept, setFilterDept] = useState('');
+  const [filterLevel, setFilterLevel] = useState('');
+  const [showAll, setShowAll] = useState(false);
+  const [simulations, setSimulations] = useState([]); // จำลองการย้าย
+
+  // ตำแหน่งว่าง
+  const vacantSlots = useMemo(() => {
+    let slots = data.filter(d => d.status === 0);
+    if (filterDept) slots = slots.filter(d => String(d.pos_code).startsWith(filterDept));
+    if (filterLevel) slots = slots.filter(d => {
+      const lvl = Number(filterLevel);
+      return LEVEL_GROUPS.some(g => g.levels.includes(lvl) && g.levels.includes(d.level));
+    });
+    return slots;
+  }, [data, filterDept, filterLevel]);
+
+  // สรุปตำแหน่งว่างตามกอง
+  const vacantByDept = useMemo(() => {
+    const map = {};
+    data.filter(d => d.status === 0).forEach(d => {
+      const dc = String(d.pos_code).substring(0, 5);
+      if (!map[dc]) map[dc] = { count: 0, slots: [] };
+      map[dc].count++;
+      map[dc].slots.push(d);
+    });
+    return map;
+  }, [data]);
+
+  // เลือกตำแหน่งว่างแล้วหาผู้เหมาะสม
+  const handleSelectSlot = useCallback((slot) => {
+    setSelectedSlot(slot);
+    const eligible = findEligibleCandidates(slot, data);
+    setCandidates(eligible);
+  }, [data]);
+
+  // จำลองการย้าย
+  const addSimulation = useCallback((person, slot) => {
+    const result = checkConditions(person, slot);
+    setSimulations(prev => [...prev, {
+      id: Date.now(),
+      person,
+      slot,
+      result,
+    }]);
+    addToast(`จำลอง: ${person.name} -> ${slot.position}`, 'info');
+  }, [addToast]);
+
+  const removeSimulation = useCallback((simId) => {
+    setSimulations(prev => prev.filter(s => s.id !== simId));
+  }, []);
+
+  // สรุปความพร้อม
+  const readiness = useMemo(() => {
+    const totalVacant = data.filter(d => d.status === 0).length;
+    const totalFilled = data.filter(d => d.status === 1).length;
+    const totalReserve = data.filter(d => d.status === 7 || d.status === 5).length;
+    const deptStats = Object.entries(vacantByDept).map(([dc, v]) => {
+      const info = DEPT_NAMES[dc] || { name: dc, short: dc };
+      return { ...info, code: dc, vacant: v.count };
+    }).sort((a, b) => b.vacant - a.vacant);
+    return { totalVacant, totalFilled, totalReserve, deptStats };
+  }, [data, vacantByDept]);
+
+  return html`
+    <div class="transfer-prep">
+      <!-- Summary Cards -->
+      <div class="tp-summary">
+        <div class="tp-card tp-card-vacant">
+          <div class="tp-card-icon">!</div>
+          <div class="tp-card-body">
+            <div class="tp-card-value">${readiness.totalVacant}</div>
+            <div class="tp-card-label">ตำแหน่งว่าง</div>
+            <div class="tp-card-sub">รอบรรจุ/ปรับย้าย</div>
+          </div>
+        </div>
+        <div class="tp-card tp-card-filled">
+          <div class="tp-card-icon">O</div>
+          <div class="tp-card-body">
+            <div class="tp-card-value">${readiness.totalFilled}</div>
+            <div class="tp-card-label">บรรจุจริง</div>
+            <div class="tp-card-sub">ตัวจริงในตำแหน่ง</div>
+          </div>
+        </div>
+        <div class="tp-card tp-card-reserve">
+          <div class="tp-card-icon">R</div>
+          <div class="tp-card-body">
+            <div class="tp-card-value">${readiness.totalReserve}</div>
+            <div class="tp-card-label">ตัวสำรอง/รรก.</div>
+            <div class="tp-card-sub">พร้อมปรับย้าย</div>
+          </div>
+        </div>
+        <div class="tp-card tp-card-sim">
+          <div class="tp-card-icon">S</div>
+          <div class="tp-card-body">
+            <div class="tp-card-value">${simulations.length}</div>
+            <div class="tp-card-label">จำลองย้าย</div>
+            <div class="tp-card-sub">รายการจำลอง</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tp-layout">
+        <!-- LEFT: ตำแหน่งว่าง -->
+        <div class="tp-panel tp-vacant-panel">
+          <h3 class="tp-panel-title">ตำแหน่งว่าง (${vacantSlots.length})</h3>
+          <div class="tp-filters">
+            <select value=${filterDept} onChange=${e => setFilterDept(e.target.value)}>
+              <option value="">ทุกกอง/สำนัก</option>
+              ${Object.entries(DEPT_NAMES).map(([k, v]) => {
+                const vc = (vacantByDept[k]?.count || 0);
+                return html`<option key=${k} value=${k}>${v.short} (${vc} ว่าง)</option>`;
+              })}
+            </select>
+          </div>
+
+          <div class="tp-slot-list">
+            ${vacantSlots.map(slot => {
+              const dc = String(slot.pos_code).substring(0, 5);
+              const deptInfo = DEPT_NAMES[dc] || { short: dc };
+              const rule = TRANSFER_RULES.find(r => r.match(slot));
+              const isSelected = selectedSlot?.id === slot.id;
+              return html`
+                <div key=${slot.id} class="tp-slot ${isSelected ? 'selected' : ''}" onClick=${() => handleSelectSlot(slot)}>
+                  <div class="tp-slot-header">
+                    <span class="tp-slot-dept">${deptInfo.short}</span>
+                    <span class="tp-slot-rank">${slot.rank_req || '-'}</span>
+                  </div>
+                  <div class="tp-slot-name">${slot.position || '-'}</div>
+                  <div class="tp-slot-meta">
+                    ${slot.branch && slot.branch !== '*' ? html`<span class="tp-tag">สาย:${slot.branch}</span>` : null}
+                    ${rule ? html`<span class="tp-tag tp-tag-rule">${rule.id}</span>` : null}
+                    ${slot.lcht_main ? html`<span class="tp-tag">ลชท:${slot.lcht_main}</span>` : null}
+                  </div>
+                </div>
+              `;
+            })}
+            ${vacantSlots.length === 0 ? html`<div class="tp-empty">ไม่พบตำแหน่งว่าง</div>` : null}
+          </div>
+        </div>
+
+        <!-- RIGHT: ผู้เหมาะสม -->
+        <div class="tp-panel tp-candidate-panel">
+          ${selectedSlot ? html`
+            <div class="tp-selected-slot">
+              <h3 class="tp-panel-title">ตำแหน่ง: ${selectedSlot.position}</h3>
+              <div class="tp-slot-detail">
+                <span>ชั้นยศที่ต้องการ: <strong>${selectedSlot.rank_req || '-'}</strong></span>
+                <span>สายงาน: <strong>${selectedSlot.branch || '-'}</strong></span>
+                <span>ระดับ: <strong>${selectedSlot.level}</strong></span>
+              </div>
+              ${(() => {
+                const rule = TRANSFER_RULES.find(r => r.match(selectedSlot));
+                return rule ? html`
+                  <div class="tp-rule-info">
+                    <strong>${rule.id}: ${rule.name}</strong>
+                    <p>${rule.desc}</p>
+                  </div>
+                ` : null;
+              })()}
+            </div>
+
+            <div class="tp-candidate-header">
+              <h4>ผู้มีคุณสมบัติ (${candidates.filter(c => showAll || c.condResult.allPass).length} คน)</h4>
+              <label class="tp-toggle">
+                <input type="checkbox" checked=${showAll} onChange=${e => setShowAll(e.target.checked)} />
+                แสดงทั้งหมด (${candidates.length})
+              </label>
+            </div>
+
+            <div class="tp-candidate-list">
+              ${(showAll ? candidates : candidates.filter(c => c.condResult.allPass)).slice(0, 50).map(person => {
+                const st = getStatus(person.status);
+                const ph = person.person_id ? getPhoto(String(person.person_id)) : null;
+                const cr = person.condResult;
+                return html`
+                  <div key=${person.id} class="tp-candidate ${cr.allPass ? 'pass' : 'partial'}">
+                    <div class="tp-cand-left" onClick=${() => onSelect(person)}>
+                      <div class="tp-cand-avatar" style=${{ background: ph ? 'transparent' : st.color }}>
+                        ${ph ? html`<img src=${ph} />` : (person.name || '?').charAt(0)}
+                      </div>
+                      <div class="tp-cand-info">
+                        <div class="tp-cand-name">${person.name || '-'}</div>
+                        <div class="tp-cand-meta">
+                          ${person.rank_req || '-'} | ${person.branch || '-'} | ${person.origin || '-'} | ${person.years_service ?? '-'}ปี
+                        </div>
+                        <div class="tp-cand-pos">${truncate(person.position, 30)}</div>
+                      </div>
+                    </div>
+                    <div class="tp-cand-right">
+                      <div class="tp-cond-score ${cr.allPass ? 'all-pass' : ''}">${cr.passCount}/${cr.totalChecks}</div>
+                      <div class="tp-cond-checks">
+                        ${cr.checks.map((c, i) => html`
+                          <span key=${i} class="tp-cond-dot ${c.pass ? 'pass' : 'fail'}" title="${c.label}: ${c.req} -> ${c.val}">
+                            ${c.pass ? 'v' : 'x'}
+                          </span>
+                        `)}
+                      </div>
+                      <button class="tp-sim-btn" onClick=${() => addSimulation(person, selectedSlot)} title="จำลองการย้าย">+</button>
+                    </div>
+                  </div>
+                `;
+              })}
+              ${candidates.length === 0 ? html`<div class="tp-empty">เลือกตำแหน่งว่างจากด้านซ้าย</div>` : null}
+            </div>
+          ` : html`
+            <div class="tp-empty-state">
+              <div class="tp-empty-icon">?</div>
+              <h3>เลือกตำแหน่งว่าง</h3>
+              <p>คลิกตำแหน่งว่างจากด้านซ้ายเพื่อดูผู้มีคุณสมบัติเหมาะสม</p>
+              <p style=${{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>อ้างอิงเงื่อนไขจากอัตราหมายเลข 1310 ยก.ทหาร</p>
+            </div>
+          `}
+        </div>
+      </div>
+
+      <!-- Simulation Panel -->
+      ${simulations.length > 0 ? html`
+        <div class="tp-sim-panel">
+          <h3 class="tp-panel-title">จำลองการปรับย้าย (${simulations.length} รายการ)</h3>
+          <div class="tp-sim-list">
+            ${simulations.map(sim => html`
+              <div key=${sim.id} class="tp-sim-item ${sim.result.allPass ? 'sim-pass' : 'sim-warn'}">
+                <div class="tp-sim-flow">
+                  <div class="tp-sim-person">
+                    <strong>${sim.person.name}</strong>
+                    <span>${sim.person.rank_req} | ${sim.person.position}</span>
+                  </div>
+                  <div class="tp-sim-arrow">>></div>
+                  <div class="tp-sim-target">
+                    <strong>${sim.slot.position}</strong>
+                    <span>ต้องการ: ${sim.slot.rank_req}</span>
+                  </div>
+                </div>
+                <div class="tp-sim-checks">
+                  ${sim.result.checks.map((c, i) => html`
+                    <div key=${i} class="tp-sim-check ${c.pass ? 'pass' : 'fail'}">
+                      <span class="tp-sim-check-icon">${c.pass ? 'v' : 'x'}</span>
+                      <span>${c.label}: ${c.req}</span>
+                      <span class="tp-sim-check-val">${c.val}</span>
+                    </div>
+                  `)}
+                </div>
+                <div class="tp-sim-result">
+                  <span class=${sim.result.allPass ? 'sim-result-pass' : 'sim-result-fail'}>
+                    ${sim.result.allPass ? 'ผ่านทุกเงื่อนไข' : `ไม่ผ่าน ${sim.result.totalChecks - sim.result.passCount} เงื่อนไข`}
+                  </span>
+                  <button class="tp-sim-remove" onClick=${() => removeSimulation(sim.id)}>ลบ</button>
+                </div>
+              </div>
+            `)}
+          </div>
+        </div>
+      ` : null}
+
+      <!-- Transfer Rules Reference -->
+      <div class="tp-rules-ref">
+        <h3 class="tp-panel-title">เงื่อนไขการปรับย้าย (อัตราหมายเลข 1310)</h3>
+        <div class="tp-rules-grid">
+          ${TRANSFER_RULES.map(rule => html`
+            <div key=${rule.id} class="tp-rule-card">
+              <div class="tp-rule-id">${rule.id}</div>
+              <div class="tp-rule-body">
+                <div class="tp-rule-name">${rule.name}</div>
+                <div class="tp-rule-desc">${rule.desc}</div>
+                <div class="tp-rule-conds">
+                  ${rule.conditions.map((c, i) => html`
+                    <span key=${i} class="tp-rule-cond">${c.label}: ${c.req}</span>
+                  `)}
+                </div>
+              </div>
+            </div>
+          `)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════════════════════
 //  SETTINGS VIEW
 // ══════════════════════════════════════════════════════
 
@@ -1201,6 +1612,7 @@ function App() {
           <button class="nav-tab ${tab === 'dashboard' ? 'active' : ''}" onClick=${() => setTab('dashboard')}>ภาพรวม</button>
           <button class="nav-tab ${tab === 'table' ? 'active' : ''}" onClick=${() => setTab('table')}>ข้อมูล</button>
           <button class="nav-tab ${tab === 'formation' ? 'active' : ''}" onClick=${() => setTab('formation')}>จัดทีม</button>
+          <button class="nav-tab ${tab === 'transfer' ? 'active' : ''}" onClick=${() => setTab('transfer')}>เตรียมย้าย</button>
           <button class="nav-tab ${tab === 'condition' ? 'active' : ''}" onClick=${() => setTab('condition')}>เงื่อนไข</button>
           <button class="nav-tab ${tab === 'settings' ? 'active' : ''}" onClick=${() => setTab('settings')}>ตั้งค่า</button>
         </nav>
@@ -1242,6 +1654,10 @@ function App() {
           ` : null}
           ${tab === 'formation' ? html`
             <${FormationView} data=${data} onDataChange=${setData}
+              onSelect=${setSelectedPerson} addToast=${addToast} />
+          ` : null}
+          ${tab === 'transfer' ? html`
+            <${TransferPrepView} data=${data}
               onSelect=${setSelectedPerson} addToast=${addToast} />
           ` : null}
           ${tab === 'condition' ? html`
