@@ -583,190 +583,333 @@ function DetailModal({ person, onClose }) {
 //  FORMATION (STARTERS + BENCH) VIEW
 // ══════════════════════════════════════════════════════
 
-function FormationView({ data, onDataChange, onSelect, addToast }) {
-  const [selectedGroup, setSelectedGroup] = useState(0);
-  const [dragPerson, setDragPerson] = useState(null);
-  const [dropTarget, setDropTarget] = useState(null);
-  const [searchBench, setSearchBench] = useState('');
+// ══════════════════════════════════════════════════════
+//  SPACE FORMATION VIEW
+// ══════════════════════════════════════════════════════
 
-  const group = LEVEL_GROUPS[selectedGroup];
-  const starters = useMemo(() =>
-    data.filter(d => group.levels.includes(d.level) && d.status === 1)
-      .sort((a, b) => (a.id - b.id)),
-    [data, selectedGroup]
-  );
+const PLANET_COLORS = [
+  { bg: 'linear-gradient(135deg, #6366f1, #4f46e5)', glow: 'rgba(99,102,241,0.4)' },
+  { bg: 'linear-gradient(135deg, #06b6d4, #0891b2)', glow: 'rgba(6,182,212,0.4)' },
+  { bg: 'linear-gradient(135deg, #8b5cf6, #7c3aed)', glow: 'rgba(139,92,246,0.4)' },
+  { bg: 'linear-gradient(135deg, #f59e0b, #d97706)', glow: 'rgba(245,158,11,0.4)' },
+  { bg: 'linear-gradient(135deg, #22c55e, #16a34a)', glow: 'rgba(34,197,94,0.4)' },
+  { bg: 'linear-gradient(135deg, #ec4899, #db2777)', glow: 'rgba(236,72,153,0.4)' },
+  { bg: 'linear-gradient(135deg, #ef4444, #dc2626)', glow: 'rgba(239,68,68,0.4)' },
+  { bg: 'linear-gradient(135deg, #14b8a6, #0d9488)', glow: 'rgba(20,184,166,0.4)' },
+  { bg: 'linear-gradient(135deg, #f97316, #ea580c)', glow: 'rgba(249,115,22,0.4)' },
+  { bg: 'linear-gradient(135deg, #3b82f6, #2563eb)', glow: 'rgba(59,130,246,0.4)' },
+];
 
-  const vacants = useMemo(() =>
-    data.filter(d => group.levels.includes(d.level) && d.status === 0)
-      .sort((a, b) => (a.id - b.id)),
-    [data, selectedGroup]
-  );
-
-  const bench = useMemo(() => {
-    let b = data.filter(d => d.status === 7 || d.status === 5);
-    if (searchBench) {
-      const q = searchBench.toLowerCase();
-      b = b.filter(d => (d.name || '').toLowerCase().includes(q));
+function checkConditions(person, slot) {
+  const checks = [];
+  // ตรวจชั้นยศ
+  if (slot.rank_req && person.rank_req) {
+    const slotRank = RANK_ORDER[slot.rank_req] || 99;
+    const personRank = RANK_ORDER[person.rank_req?.replace(/^.*?\s/, '')] || 99;
+    // ยอมรับยศใกล้เคียง (+-2)
+    const pass = Math.abs(slotRank - personRank) <= 2;
+    checks.push({ label: 'ชั้นยศ', req: slot.rank_req, val: person.rank_req || '-', pass });
+  }
+  // ตรวจสายงาน
+  if (slot.branch && slot.branch !== '*') {
+    const pass = !person.branch || person.branch === slot.branch || slot.branch === '*';
+    checks.push({ label: 'สายงาน', req: slot.branch, val: person.branch || '-', pass: pass || !person.branch });
+  }
+  // ตรวจ ลชท.
+  if (slot.position_detail) {
+    const lchtMatch = slot.position_detail.match(/ลชท\.หลัก\s*(?:สธ\.)?(\d+)/);
+    if (lchtMatch && person.lcht_main) {
+      const pass = String(person.lcht_main) === lchtMatch[1];
+      checks.push({ label: 'ลชท.หลัก', req: lchtMatch[1], val: String(person.lcht_main), pass });
     }
-    return b;
-  }, [data, searchBench]);
+  }
+  const allPass = checks.length === 0 || checks.every(c => c.pass);
+  return { checks, allPass };
+}
 
-  const handleDragStart = (person) => setDragPerson(person);
+function SpaceFormationView({ data, onDataChange, onSelect, addToast }) {
+  const canvasRef = useRef(null);
+  const [dragPerson, setDragPerson] = useState(null);
+  const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
+  const [hoverSlot, setHoverSlot] = useState(null);
+  const [selectedPlanet, setSelectedPlanet] = useState(null);
+  const [condPopup, setCondPopup] = useState(null);
+  const [searchCrew, setSearchCrew] = useState('');
+  const [crewFilter, setCrewFilter] = useState('all');
+  const [zoom, setZoom] = useState(1);
 
-  const handleDrop = (targetSlot) => {
-    if (!dragPerson || !targetSlot) return;
-    if (targetSlot.status !== 0) {
-      addToast('ตำแหน่งนี้ไม่ว่าง ไม่สามารถย้ายได้', 'error');
+  // Build planets from departments
+  const planets = useMemo(() => {
+    const tree = buildOrgTree(data);
+    const cx = 600, cy = 400;
+    return tree.map((dept, i) => {
+      const angle = (i / tree.length) * Math.PI * 2 - Math.PI / 2;
+      const radius = 260 + (i % 2) * 60;
+      const size = 40 + Math.min(dept.all.length / 3, 40);
+      return {
+        ...dept,
+        x: cx + Math.cos(angle) * radius,
+        y: cy + Math.sin(angle) * radius,
+        size,
+        color: PLANET_COLORS[i % PLANET_COLORS.length],
+        vacantSlots: dept.vacant.slice(0, 8),
+        filledPeople: dept.filled.slice(0, 12),
+      };
+    });
+  }, [data]);
+
+  // Crew members (all filled + reserve)
+  const crew = useMemo(() => {
+    let list = data.filter(d => d.status === 1 || d.status === 7 || d.status === 5);
+    if (searchCrew) {
+      const q = searchCrew.toLowerCase();
+      list = list.filter(d => (d.name || '').toLowerCase().includes(q) || (d.rank_req || '').toLowerCase().includes(q));
+    }
+    if (crewFilter === 'reserve') list = list.filter(d => d.status === 7 || d.status === 5);
+    if (crewFilter === 'officer') list = list.filter(d => d.level <= 10);
+    if (crewFilter === 'nco') list = list.filter(d => d.level > 10);
+    return list;
+  }, [data, searchCrew, crewFilter]);
+
+  // Generate stars
+  const stars = useMemo(() => {
+    const arr = [];
+    for (let i = 0; i < 120; i++) {
+      arr.push({
+        x: Math.random() * 1400,
+        y: Math.random() * 900,
+        s: Math.random() * 2 + 0.5,
+        dur: Math.random() * 4 + 2,
+        o1: Math.random() * 0.3 + 0.1,
+        o2: Math.random() * 0.5 + 0.4,
+      });
+    }
+    return arr;
+  }, []);
+
+  // Drag handlers
+  const handleMouseMove = useCallback((e) => {
+    if (dragPerson) setDragPos({ x: e.clientX, y: e.clientY });
+  }, [dragPerson]);
+
+  const handleMouseUp = useCallback((e) => {
+    if (!dragPerson || !hoverSlot) {
       setDragPerson(null);
-      setDropTarget(null);
+      setCondPopup(null);
       return;
     }
+    // Check conditions
+    const { checks, allPass } = checkConditions(dragPerson, hoverSlot);
 
+    if (checks.length > 0) {
+      setCondPopup({ person: dragPerson, slot: hoverSlot, checks, allPass, x: e.clientX, y: e.clientY });
+      return;
+    }
+    // No conditions to check, just place
+    confirmPlace(dragPerson, hoverSlot);
+  }, [dragPerson, hoverSlot, data]);
+
+  const confirmPlace = (person, slot) => {
     const newData = data.map(d => {
-      if (d.id === targetSlot.id) {
-        return { ...d, status: 1, name: dragPerson.name, person_id: dragPerson.person_id,
-          origin: dragPerson.origin, corps: dragPerson.corps, education: dragPerson.education,
-          lcht_main: dragPerson.lcht_main, lcht_gen: dragPerson.lcht_gen,
-          entry_be: dragPerson.entry_be, years_service: dragPerson.years_service,
-          birth_be: dragPerson.birth_be, years_in_rank: dragPerson.years_in_rank,
-          position_detail: dragPerson.position_detail,
-          status_text: 'บรรจุจริง' };
+      if (d.id === slot.id) {
+        return { ...d, status: 1, name: person.name, person_id: person.person_id,
+          origin: person.origin, corps: person.corps, education: person.education,
+          lcht_main: person.lcht_main, lcht_gen: person.lcht_gen,
+          entry_be: person.entry_be, years_service: person.years_service,
+          birth_be: person.birth_be, years_in_rank: person.years_in_rank,
+          position_detail: person.position_detail || slot.position_detail,
+          rank_req: slot.rank_req, status_text: 'บรรจุจริง' };
       }
-      if (d.id === dragPerson.id) {
+      if (d.id === person.id) {
         return { ...d, status: 0, name: '', person_id: null,
           origin: '', corps: '', education: '',
           lcht_main: null, lcht_gen: null,
           entry_be: null, years_service: null,
           birth_be: null, years_in_rank: null,
-          position_detail: '',
-          status_text: 'ว่าง' };
+          position_detail: '', status_text: 'ว่าง' };
       }
       return d;
     });
-
     onDataChange(newData);
-    addToast(`ย้าย ${dragPerson.name} ไปตำแหน่ง ${targetSlot.position} สำเร็จ`, 'success');
+    addToast(`ส่ง ${person.name} ไปตำแหน่ง ${slot.position} สำเร็จ`, 'success');
     setDragPerson(null);
-    setDropTarget(null);
+    setHoverSlot(null);
+    setCondPopup(null);
   };
 
-  const handleSwap = (personA, personB) => {
-    if (!personA || !personB) return;
-    const newData = data.map(d => {
-      if (d.id === personA.id) {
-        return { ...d, name: personB.name, person_id: personB.person_id,
-          status: personB.status, status_text: personB.status_text,
-          origin: personB.origin, corps: personB.corps, education: personB.education,
-          lcht_main: personB.lcht_main, lcht_gen: personB.lcht_gen,
-          entry_be: personB.entry_be, years_service: personB.years_service,
-          birth_be: personB.birth_be, years_in_rank: personB.years_in_rank,
-          position_detail: personB.position_detail };
-      }
-      if (d.id === personB.id) {
-        return { ...d, name: personA.name, person_id: personA.person_id,
-          status: personA.status, status_text: personA.status_text,
-          origin: personA.origin, corps: personA.corps, education: personA.education,
-          lcht_main: personA.lcht_main, lcht_gen: personA.lcht_gen,
-          entry_be: personA.entry_be, years_service: personA.years_service,
-          birth_be: personA.birth_be, years_in_rank: personA.years_in_rank,
-          position_detail: personA.position_detail };
-      }
-      return d;
-    });
-    onDataChange(newData);
-    addToast(`สลับ ${personA.name} <-> ${personB.name} สำเร็จ`, 'success');
+  useEffect(() => {
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
+  // Orbit positions around planet
+  const getOrbitPos = (planet, index, total, orbitR) => {
+    const angle = (index / total) * Math.PI * 2 - Math.PI / 2;
+    return {
+      left: planet.x + Math.cos(angle) * orbitR - 18,
+      top: planet.y + Math.sin(angle) * orbitR - 18,
+    };
   };
+
+  const photo = (p) => p?.person_id ? getPhoto(String(p.person_id)) : null;
 
   return html`
-    <div class="formation-layout">
-      <!-- Left: Starters -->
-      <div>
-        <div style=${{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-          ${LEVEL_GROUPS.map((g, i) => html`
-            <button key=${i} class="nav-tab ${selectedGroup === i ? 'active' : ''}"
-              onClick=${() => setSelectedGroup(i)}>
-              ${g.icon} ${g.label}
-            </button>
+    <div class="space-layout" style=${{ position: 'relative' }}>
+      <!-- Space Canvas -->
+      <div class="space-canvas" ref=${canvasRef}>
+        <div style=${{ width: 1400, height: 900, position: 'relative', transform: 'scale(' + zoom + ')', transformOrigin: 'center center' }}>
+          <!-- Stars -->
+          <div class="space-stars">
+            ${stars.map((s, i) => html`
+              <div key=${i} class="space-star" style=${{
+                left: s.x + 'px', top: s.y + 'px',
+                width: s.s + 'px', height: s.s + 'px',
+                '--dur': s.dur + 's', '--o1': s.o1, '--o2': s.o2
+              }}></div>
+            `)}
+          </div>
+
+          <!-- Center label -->
+          <div style=${{ position: 'absolute', top: 360, left: '50%', transform: 'translateX(-50%)', textAlign: 'center', pointerEvents: 'none', zIndex: 2 }}>
+            <div style=${{ fontSize: 22, fontWeight: 700, color: 'rgba(255,255,255,0.15)', letterSpacing: 2 }}>กรมยุทธการทหาร</div>
+            <div style=${{ fontSize: 11, color: 'rgba(255,255,255,0.08)', marginTop: 4 }}>ลากคนจากด้านขวา วางลงบนวงโคจร</div>
+          </div>
+
+          <!-- Planets -->
+          ${planets.map((p, pi) => {
+            const orbitR = p.size + 30;
+            const orbitR2 = p.size + 60;
+            const allOrbit = [...p.filledPeople, ...p.vacantSlots];
+            return html`
+              <div key=${p.code} class="space-planet-group" style=${{ left: p.x + 'px', top: p.y + 'px', transform: 'translate(-50%,-50%)' }}>
+                <!-- Orbit rings -->
+                <div class="orbit-ring" style=${{ width: orbitR * 2 + 'px', height: orbitR * 2 + 'px', left: -orbitR + 'px', top: -orbitR + 'px' }}></div>
+                ${allOrbit.length > 8 ? html`<div class="orbit-ring" style=${{ width: orbitR2 * 2 + 'px', height: orbitR2 * 2 + 'px', left: -orbitR2 + 'px', top: -orbitR2 + 'px' }}></div>` : null}
+
+                <!-- Planet core -->
+                <div class="space-planet ${selectedPlanet === p.code ? 'selected' : ''}"
+                  style=${{ width: p.size + 'px', height: p.size + 'px', background: p.color.bg, '--glow-color': p.color.glow }}
+                  onClick=${() => setSelectedPlanet(selectedPlanet === p.code ? null : p.code)}>
+                  <span class="planet-count">${p.filled.length}</span>
+                  <span class="planet-label">${p.short}</span>
+                  <span class="planet-sub">${p.filled.length}/${p.all.length}</span>
+                </div>
+
+                <!-- Filled people orbiting -->
+                ${p.filledPeople.map((person, oi) => {
+                  const pos = getOrbitPos({ x: 0, y: 0 }, oi, Math.min(allOrbit.length, 8), orbitR);
+                  const ph = photo(person);
+                  return html`
+                    <div key=${person.id} class="orbit-person"
+                      style=${{ left: pos.left + 'px', top: pos.top + 'px', background: ph ? 'transparent' : '#22c55e' }}
+                      onClick=${() => onSelect(person)}>
+                      ${ph ? html`<img src=${ph} />` : (person.name || '?').charAt(0)}
+                      <div class="person-tooltip">${person.name}<br/>${person.rank_req}</div>
+                    </div>
+                  `;
+                })}
+
+                <!-- Vacant orbit slots -->
+                ${p.vacantSlots.map((slot, oi) => {
+                  const pos = getOrbitPos({ x: 0, y: 0 }, p.filledPeople.length + oi, Math.min(allOrbit.length, 8), orbitR);
+                  const isHover = hoverSlot?.id === slot.id;
+                  const cond = isHover && dragPerson ? checkConditions(dragPerson, slot) : null;
+                  return html`
+                    <div key=${slot.id}
+                      class="orbit-slot ${isHover ? (cond?.allPass !== false ? 'drop-hover' : 'drop-invalid') : ''}"
+                      style=${{ left: pos.left + 'px', top: pos.top + 'px' }}
+                      onMouseEnter=${() => { if (dragPerson) setHoverSlot(slot); }}
+                      onMouseLeave=${() => setHoverSlot(null)}
+                      onClick=${() => onSelect(slot)}>
+                      ?
+                    </div>
+                  `;
+                })}
+              </div>
+            `;
+          })}
+        </div>
+
+        <!-- Zoom controls -->
+        <div class="space-controls">
+          <button onClick=${() => setZoom(z => Math.min(z + 0.1, 1.5))}>+</button>
+          <button onClick=${() => setZoom(z => Math.max(z - 0.1, 0.5))}>−</button>
+          <button onClick=${() => setZoom(1)}>⟳</button>
+        </div>
+      </div>
+
+      <!-- Crew Panel (Right) -->
+      <div class="crew-panel">
+        <div class="crew-header">
+          <h3>กำลังพล (${crew.length})</h3>
+          <input class="crew-search" placeholder="ค้นหาชื่อ, ยศ..."
+            value=${searchCrew} onInput=${e => setSearchCrew(e.target.value)} />
+        </div>
+        <div class="crew-filters">
+          ${[['all','ทั้งหมด'],['reserve','สำรอง/รรก.'],['officer','สัญญาบัตร'],['nco','ประทวน']].map(([k, l]) => html`
+            <button key=${k} class="crew-filter-btn ${crewFilter === k ? 'active' : ''}"
+              onClick=${() => setCrewFilter(k)}>${l}</button>
           `)}
         </div>
+        <div class="crew-list">
+          ${crew.map(p => {
+            const st = getStatus(p.status);
+            const ph = photo(p);
+            return html`
+              <div key=${p.id} class="crew-member ${dragPerson?.id === p.id ? 'dragging' : ''}"
+                onMouseDown=${(e) => { e.preventDefault(); setDragPerson(p); setDragPos({ x: e.clientX, y: e.clientY }); }}
+                onClick=${() => { if (!dragPerson) onSelect(p); }}>
+                <div class="cm-avatar" style=${{ background: ph ? 'transparent' : st.color }}>
+                  ${ph ? html`<img src=${ph} />` : (p.name || '?').charAt(0)}
+                </div>
+                <div class="cm-info">
+                  <div class="cm-name">${p.name || '-'}</div>
+                  <div class="cm-meta">${truncate(p.position, 20)} | ${p.years_service ?? '-'}ปี</div>
+                </div>
+                <div class="cm-rank">${p.rank_req || '-'}</div>
+              </div>
+            `;
+          })}
+          ${crew.length === 0 ? html`<div class="empty-state">ไม่พบกำลังพล</div>` : null}
+        </div>
+      </div>
 
-        <div class="formation-panel">
-          <div class="panel-header">
-            <h3>ตัวจริง - ${group.label} (${starters.length})</h3>
-            <span style=${{ fontSize: 12, color: 'var(--text-dim)' }}>ว่าง: ${vacants.length}</span>
-          </div>
-          <div class="panel-body">
-            <div class="slot-list">
-              ${starters.map(p => html`
-                <div key=${p.id} class="position-slot" onClick=${() => onSelect(p)}>
-                  <div class="slot-avatar" style=${{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}>
-                    ${(p.name || '?').charAt(0)}
-                  </div>
-                  <div class="slot-info">
-                    <div class="slot-title">${p.name}</div>
-                    <div class="slot-sub">${p.position} | ${p.rank_req}</div>
-                  </div>
-                  <div class="slot-actions">
-                    <button class="slot-btn" onClick=${e => { e.stopPropagation(); onSelect(p); }}>ดู</button>
-                  </div>
-                </div>
-              `)}
-              ${vacants.map(p => html`
-                <div key=${p.id}
-                  class="position-slot ${dropTarget === p.id ? 'drop-target' : ''}"
-                  onClick=${() => onSelect(p)}
-                  onDragOver=${e => { e.preventDefault(); setDropTarget(p.id); }}
-                  onDragLeave=${() => setDropTarget(null)}
-                  onDrop=${e => { e.preventDefault(); handleDrop(p); }}>
-                  <div class="slot-avatar" style=${{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', borderStyle: 'dashed', border: '2px dashed rgba(255,255,255,0.3)' }}>?</div>
-                  <div class="slot-info">
-                    <div class="slot-title" style=${{ color: 'var(--amber)' }}>ว่าง</div>
-                    <div class="slot-sub">${p.position} | ${p.rank_req}</div>
-                  </div>
-                  <span class="status-badge vacant" style=${{ fontSize: 10 }}>รอบรรจุ</span>
-                </div>
-              `)}
+      <!-- Drag ghost -->
+      ${dragPerson ? html`
+        <div class="drag-ghost" style=${{ left: dragPos.x + 'px', top: dragPos.y + 'px', background: photo(dragPerson) ? 'transparent' : 'var(--accent)' }}>
+          ${photo(dragPerson) ? html`<img src=${photo(dragPerson)} />` : (dragPerson.name || '?').charAt(0)}
+        </div>
+      ` : null}
+
+      <!-- Condition Popup -->
+      ${condPopup ? html`
+        <div class="condition-popup" style=${{ left: Math.min(condPopup.x, window.innerWidth - 300) + 'px', top: condPopup.y - 200 + 'px', position: 'fixed' }}>
+          <h4>ตรวจเงื่อนไข: ${condPopup.slot.position}</h4>
+          ${condPopup.checks.map((c, i) => html`
+            <div key=${i} class="condition-item">
+              <span class="cond-label">${c.label}</span>
+              <span>ต้องการ: ${c.req}</span>
+              <span class=${c.pass ? 'cond-pass' : 'cond-fail'}>${c.val} ${c.pass ? '✓' : '✗'}</span>
             </div>
+          `)}
+          <div class="condition-actions">
+            <button class="btn btn-primary btn-sm" onClick=${() => confirmPlace(condPopup.person, condPopup.slot)}>
+              ${condPopup.allPass ? 'ยืนยันบรรจุ' : 'บรรจุถึงแม้ไม่ผ่าน'}
+            </button>
+            <button class="btn btn-secondary btn-sm" onClick=${() => { setCondPopup(null); setDragPerson(null); }}>ยกเลิก</button>
           </div>
         </div>
-      </div>
-
-      <!-- Right: Bench -->
-      <div class="formation-panel">
-        <div class="panel-header">
-          <h3>ตัวสำรอง (${bench.length})</h3>
-        </div>
-        <div style=${{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-          <input class="search-box" style=${{ width: '100%' }} placeholder="ค้นหาตัวสำรอง..."
-            value=${searchBench} onInput=${e => setSearchBench(e.target.value)} />
-        </div>
-        <div class="panel-body">
-          <div class="bench-section">
-            <div class="bench-header">ประจำ / รรก. - ลากไปวางที่ตำแหน่งว่าง</div>
-            ${bench.map(p => {
-              const st = getStatus(p.status);
-              return html`
-                <div key=${p.id} class="bench-person"
-                  draggable="true"
-                  onDragStart=${() => handleDragStart(p)}
-                  onDragEnd=${() => { setDragPerson(null); setDropTarget(null); }}
-                  onClick=${() => onSelect(p)}>
-                  <div class="mini-avatar" style=${{ background: st.color }}>${(p.name || '?').charAt(0)}</div>
-                  <div class="person-info">
-                    <div class="person-name">${p.name || '-'}</div>
-                    <div class="person-meta">${p.position} | ${p.rank_req} | อายุราชการ ${p.years_service ?? '-'} ปี</div>
-                  </div>
-                  <span class="status-badge ${st.cls}" style=${{ fontSize: 10 }}>${st.label}</span>
-                </div>
-              `;
-            })}
-            ${bench.length === 0 ? html`<div class="empty-state">ไม่พบตัวสำรอง</div>` : null}
-          </div>
-        </div>
-      </div>
+      ` : null}
     </div>
   `;
 }
+
+// Legacy alias
+function FormationView(props) { return html`<${SpaceFormationView} ...${props} />`; }
 
 // ══════════════════════════════════════════════════════
 //  CONDITION FILTER VIEW
