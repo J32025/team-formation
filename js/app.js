@@ -107,9 +107,237 @@ function StatsBar({ data }) {
 }
 
 // ══════════════════════════════════════════════════════
-//  FOOTBALL FIELD VIEW
+//  PHOTO STORAGE (localStorage)
 // ══════════════════════════════════════════════════════
 
+const PHOTO_KEY = 'team_mgmt_photos';
+
+function loadPhotos() {
+  try { return JSON.parse(localStorage.getItem(PHOTO_KEY)) || {}; } catch { return {}; }
+}
+
+function savePhoto(personId, dataUrl) {
+  const photos = loadPhotos();
+  photos[personId] = dataUrl;
+  localStorage.setItem(PHOTO_KEY, JSON.stringify(photos));
+}
+
+function getPhoto(personId) {
+  return loadPhotos()[personId] || null;
+}
+
+// ══════════════════════════════════════════════════════
+//  AVATAR COMPONENT (with photo)
+// ══════════════════════════════════════════════════════
+
+function Avatar({ person, size = 40, showUpload = false, onPhotoChange }) {
+  const photo = person?.person_id ? getPhoto(String(person.person_id)) : null;
+  const st = getStatus(person?.status);
+  const initial = (person?.name || '?').charAt(0);
+  const fileRef = useRef(null);
+
+  const bgStyle = photo ? {} : { background: st.color || 'var(--accent)' };
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      // Resize to 100x100 for storage
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 100; canvas.height = 100;
+        const ctx = canvas.getContext('2d');
+        const s = Math.min(img.width, img.height);
+        const sx = (img.width - s) / 2, sy = (img.height - s) / 2;
+        ctx.drawImage(img, sx, sy, s, s, 0, 0, 100, 100);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        savePhoto(String(person.person_id), dataUrl);
+        if (onPhotoChange) onPhotoChange();
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return html`
+    <div class="p-avatar" style=${{ width: size, height: size, fontSize: size * 0.35, ...bgStyle }}>
+      ${photo
+        ? html`<img src=${photo} alt="" />`
+        : initial}
+      ${showUpload && person?.person_id ? html`
+        <div class="photo-upload" onClick=${(e) => { e.stopPropagation(); fileRef.current?.click(); }}>📷</div>
+        <input ref=${fileRef} class="photo-input" type="file" accept="image/*" onChange=${handleFile} />
+      ` : null}
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════════════════════
+//  ORG TREE HELPERS
+// ══════════════════════════════════════════════════════
+
+const DEPT_NAMES = {
+  '40900': { name: 'กรมยุทธการทหาร (ส่วนบังคับบัญชา)', short: 'บก.ยก.ทหาร' },
+  '40901': { name: 'กองกำลังพล', short: 'กกล.' },
+  '40902': { name: 'กองแผนงาน', short: 'กผง.' },
+  '40903': { name: 'กองการเงิน', short: 'กกง.' },
+  '40904': { name: 'กองกฎหมาย', short: 'กกม.' },
+  '40905': { name: 'สำนักนโยบายและแผน', short: 'สนผ.' },
+  '40906': { name: 'สำนักปฏิบัติการ', short: 'สปก.' },
+  '40907': { name: 'สำนักวิชาการและฝึก', short: 'สวฝ.' },
+  '40908': { name: 'ศูนย์สันติภาพ', short: 'ศสภ.' },
+  '40909': { name: 'สำนักงาน ปรมน.', short: 'สง.ปรมน.' },
+};
+
+function buildOrgTree(data) {
+  const depts = {};
+  for (const d of data) {
+    const code = String(d.pos_code || '');
+    const deptCode = code.slice(0, 5);
+    const secCode = code.slice(0, 8);
+    if (!deptCode) continue;
+    if (!depts[deptCode]) depts[deptCode] = { code: deptCode, sections: {}, all: [] };
+    depts[deptCode].all.push(d);
+    if (!depts[deptCode].sections[secCode]) depts[deptCode].sections[secCode] = [];
+    depts[deptCode].sections[secCode].push(d);
+  }
+
+  return Object.keys(depts).sort().map(dc => {
+    const dept = depts[dc];
+    const filled = dept.all.filter(d => d.status === 1);
+    const vacant = dept.all.filter(d => d.status === 0);
+    const head = filled.reduce((best, d) => (!best || d.level < best.level) ? d : best, null);
+    const info = DEPT_NAMES[dc] || { name: dc, short: dc };
+
+    const sections = Object.keys(dept.sections).sort().map(sc => {
+      const items = dept.sections[sc];
+      const secFilled = items.filter(d => d.status === 1);
+      const secVacant = items.filter(d => d.status === 0);
+      const secHead = secFilled.reduce((b, d) => (!b || d.level < b.level) ? d : b, null);
+      return { code: sc, items, filled: secFilled, vacant: secVacant, head: secHead };
+    });
+
+    return { code: dc, ...info, all: dept.all, filled, vacant, head, sections };
+  });
+}
+
+// ══════════════════════════════════════════════════════
+//  ORG TREE VIEW (replaces FieldView)
+// ══════════════════════════════════════════════════════
+
+function OrgTreeView({ data, onSelect }) {
+  const [openDepts, setOpenDepts] = useState({});
+  const [openSections, setOpenSections] = useState({});
+  const [showVacant, setShowVacant] = useState(false);
+  const [photoVer, setPhotoVer] = useState(0);
+
+  const tree = useMemo(() => buildOrgTree(data), [data]);
+
+  const toggleDept = (code) => setOpenDepts(prev => ({ ...prev, [code]: !prev[code] }));
+  const toggleSection = (code) => setOpenSections(prev => ({ ...prev, [code]: !prev[code] }));
+
+  const expandAll = () => {
+    const d = {}, s = {};
+    tree.forEach(dept => { d[dept.code] = true; dept.sections.forEach(sec => { s[sec.code] = true; }); });
+    setOpenDepts(d); setOpenSections(s);
+  };
+  const collapseAll = () => { setOpenDepts({}); setOpenSections({}); };
+
+  return html`
+    <div>
+      <div class="tree-controls">
+        <button class="ctrl-btn" onClick=${expandAll}>▶ ขยายทั้งหมด</button>
+        <button class="ctrl-btn" onClick=${collapseAll}>◀ ยุบทั้งหมด</button>
+        <button class="ctrl-btn ${showVacant ? 'active' : ''}" onClick=${() => setShowVacant(v => !v)}>
+          ${showVacant ? '● แสดงตำแหน่งว่าง' : '○ ซ่อนตำแหน่งว่าง'}
+        </button>
+        <span style=${{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-dim)' }}>
+          ${tree.length} หน่วย | ${data.filter(d => d.status === 1).length} คนบรรจุจริง
+        </span>
+      </div>
+
+      <div class="org-tree">
+        ${tree.map(dept => html`
+          <div key=${dept.code} class="dept-card">
+            <!-- Department Header -->
+            <div class="dept-header" onClick=${() => toggleDept(dept.code)}>
+              <div class="dept-toggle ${openDepts[dept.code] ? 'open' : ''}">▶</div>
+              <${Avatar} person=${dept.head} size=${48} showUpload=${true} onPhotoChange=${() => setPhotoVer(v => v + 1)} />
+              <div class="dept-info">
+                <div class="dept-name">${dept.name}</div>
+                <div class="dept-meta">
+                  <span>${dept.head?.name || '(ว่าง)'}</span>
+                  <span>|</span>
+                  <span>${dept.sections.length} หน่วยย่อย</span>
+                </div>
+              </div>
+              <div class="dept-stats">
+                <span class="dept-stat-pill filled">${dept.filled.length} คน</span>
+                <span class="dept-stat-pill vacant">${dept.vacant.length} ว่าง</span>
+                <div class="fill-bar">
+                  <div class="fill-bar-inner" style=${{ width: `${(dept.filled.length / dept.all.length * 100)}%` }}></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sections (expanded) -->
+            ${openDepts[dept.code] ? html`
+              <div class="dept-body">
+                ${dept.sections.map(sec => html`
+                  <div key=${sec.code} class="section-card">
+                    <div class="section-header" onClick=${() => toggleSection(sec.code)}>
+                      <div class="section-toggle ${openSections[sec.code] ? 'open' : ''}">▶</div>
+                      <${Avatar} person=${sec.head} size=${32} />
+                      <div class="section-info">
+                        <div class="section-name">${sec.head?.position || sec.code}</div>
+                        <div class="section-meta">${sec.filled.length}/${sec.items.length} ตำแหน่ง</div>
+                      </div>
+                      <div class="dept-stats">
+                        <span class="dept-stat-pill filled" style=${{ fontSize: 10, padding: '2px 8px' }}>${sec.filled.length}</span>
+                        ${sec.vacant.length > 0 ? html`
+                          <span class="dept-stat-pill vacant" style=${{ fontSize: 10, padding: '2px 8px' }}>${sec.vacant.length}</span>
+                        ` : null}
+                      </div>
+                    </div>
+
+                    ${openSections[sec.code] ? html`
+                      <div class="person-grid">
+                        ${sec.filled.sort((a, b) => a.level - b.level || a.id - b.id).map(p => html`
+                          <div key=${p.id} class="person-card" onClick=${() => onSelect(p)}>
+                            <${Avatar} person=${p} size=${40} showUpload=${true} onPhotoChange=${() => setPhotoVer(v => v + 1)} />
+                            <div class="p-info">
+                              <div class="p-name">${p.name}</div>
+                              <div class="p-role">${p.rank_req} | ${truncate(p.position, 16)}</div>
+                            </div>
+                            <div class="p-status-dot" style=${{ background: '#22c55e' }}></div>
+                          </div>
+                        `)}
+                        ${showVacant ? sec.vacant.map(p => html`
+                          <div key=${p.id} class="person-card vacant-card" onClick=${() => onSelect(p)}>
+                            <div class="p-avatar" style=${{ width: 40, height: 40, background: 'var(--border)', fontSize: 14 }}>?</div>
+                            <div class="p-info">
+                              <div class="p-name" style=${{ color: 'var(--amber)' }}>ว่าง</div>
+                              <div class="p-role">${p.rank_req} | ${truncate(p.position, 16)}</div>
+                            </div>
+                            <div class="p-status-dot" style=${{ background: 'var(--amber)' }}></div>
+                          </div>
+                        `) : null}
+                      </div>
+                    ` : null}
+                  </div>
+                `)}
+              </div>
+            ` : null}
+          </div>
+        `)}
+      </div>
+    </div>
+  `;
+}
+
+// (Legacy FieldView removed - replaced by OrgTreeView above)
 function FieldView({ data, onSelect }) {
   const groups = useMemo(() => {
     return LEVEL_GROUPS.map(g => ({
@@ -857,7 +1085,7 @@ function App() {
         ` : html`
           ${tab === 'dashboard' ? html`
             <${StatsBar} data=${data} />
-            <${FieldView} data=${data} onSelect=${setSelectedPerson} />
+            <${OrgTreeView} data=${data} onSelect=${setSelectedPerson} />
             <${DataTable} data=${data} onSelect=${setSelectedPerson}
               searchText=${searchText} setSearchText=${setSearchText}
               filterStatus=${filterStatus} setFilterStatus=${setFilterStatus}
