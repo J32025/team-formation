@@ -2153,6 +2153,29 @@ body {
   border: 1px solid var(--border);
 }
 
+/* Direction indicators */
+.tp-direction {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800;
+  flex-shrink: 0;
+}
+.tp-dir-up { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+.tp-dir-down { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+.tp-dir-same { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+
+/* Blocked candidate */
+.tp-candidate.blocked {
+  border-left: 3px solid #ef4444;
+  opacity: 0.5;
+}
+.tp-candidate.blocked .tp-cond-score { color: #ef4444; }
+
+/* Blocked simulation */
+.tp-sim-item.sim-blocked { border-left: 4px solid #ef4444; background: rgba(239, 68, 68, 0.04); }
+.sim-result-blocked { font-size: 13px; font-weight: 600; color: #ef4444; }
+
 @media (max-width: 900px) {
   .tp-summary { grid-template-columns: repeat(2, 1fr); }
   .tp-layout { grid-template-columns: 1fr; }

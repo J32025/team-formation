@@ -675,23 +675,68 @@ const PLANET_COLORS = [
 
 function checkConditions(person, slot) {
   const checks = [];
+  let blocked = false; // ถูกบล็อกไม่ให้ย้าย
 
-  // 1. ตรวจชั้นยศ (อ้างอิงอัตราหมายเลข 1310)
-  if (slot.rank_req && person.rank_req) {
-    const slotRank = RANK_ORDER[slot.rank_req] || 99;
-    const personRankClean = (person.rank_req || '').replace(/^.*?\s/, '');
-    const personRank = RANK_ORDER[personRankClean] || 99;
-    const pass = Math.abs(slotRank - personRank) <= 2;
-    checks.push({ label: 'ชั้นยศ', req: slot.rank_req, val: person.rank_req || '-', pass });
+  // ═══ 0. ตรวจทิศทางการย้าย (สูง->ต่ำ ห้าม / ต่ำ->สูง ต้องมีเงื่อนไข) ═══
+  const slotRank = RANK_ORDER[slot.rank_req] || 99;
+  const personRankClean = (person.rank_req || '').replace(/^.*?\s/, '');
+  const personRank = RANK_ORDER[personRankClean] || 99;
+  // RANK_ORDER: เลขน้อย = ยศสูง, เลขมาก = ยศต่ำ
+  // personRank < slotRank = คนมียศสูงกว่าตำแหน่ง (ย้ายลง) -> ห้าม
+  // personRank > slotRank = คนมียศต่ำกว่าตำแหน่ง (ย้ายขึ้น) -> ต้องผ่านเงื่อนไข
+  // personRank === slotRank = ยศเท่ากัน -> ย้ายได้ตามปกติ
+
+  const direction = personRank === slotRank ? 'same'
+    : personRank < slotRank ? 'down'  // ยศสูงกว่าตำแหน่ง = ย้ายลง
+    : 'up'; // ยศต่ำกว่าตำแหน่ง = ย้ายขึ้น
+
+  if (direction === 'down' && slot.rank_req && person.rank_req) {
+    // ═══ ห้ามย้ายลง: ยศสูงกว่า ห้ามย้ายไปตำแหน่งต่ำกว่า ═══
+    blocked = true;
+    checks.push({
+      label: 'ทิศทางย้าย',
+      req: 'ห้ามย้ายลง (ยศสูงกว่าตำแหน่ง)',
+      val: `${person.rank_req} -> ${slot.rank_req}`,
+      pass: false,
+      critical: true,
+    });
   }
 
-  // 2. ตรวจสายงาน
+  if (direction === 'up' && slot.rank_req && person.rank_req) {
+    // ═══ ย้ายขึ้น: ยศต่ำกว่าต้องผ่านเงื่อนไขเพิ่มเติม ═══
+    checks.push({
+      label: 'ทิศทางย้าย',
+      req: 'ย้ายขึ้น (ต้องผ่านเงื่อนไข)',
+      val: `${person.rank_req} -> ${slot.rank_req}`,
+      pass: true, // อนุญาตแต่ต้องผ่านเงื่อนไขอื่นทั้งหมด
+      info: true,
+    });
+  }
+
+  // ถ้าถูกบล็อก (ย้ายลง) คืนผลทันที ไม่ต้องตรวจเงื่อนไขอื่น
+  if (blocked) {
+    return { checks, allPass: false, passCount: 0, totalChecks: checks.length, rule: null, blocked: true, direction };
+  }
+
+  // ═══ 1. ตรวจชั้นยศ (อ้างอิงอัตราหมายเลข 1310) ═══
+  if (slot.rank_req && person.rank_req) {
+    if (direction === 'up') {
+      // ย้ายขึ้น: ยอมรับยศต่ำกว่าได้ไม่เกิน 1 ขั้น
+      const pass = (personRank - slotRank) <= 1;
+      checks.push({ label: 'ชั้นยศ', req: `${slot.rank_req} (ต่ำกว่าได้ไม่เกิน 1 ขั้น)`, val: person.rank_req || '-', pass });
+    } else {
+      // ยศเท่ากัน: ตรงตำแหน่งพอดี
+      checks.push({ label: 'ชั้นยศ', req: slot.rank_req, val: person.rank_req || '-', pass: true });
+    }
+  }
+
+  // ═══ 2. ตรวจสายงาน ═══
   if (slot.branch && slot.branch !== '*') {
     const pass = !person.branch || person.branch === slot.branch;
     checks.push({ label: 'สายงาน', req: slot.branch, val: person.branch || '-', pass: pass || !person.branch });
   }
 
-  // 3. ตรวจ ลชท.หลัก
+  // ═══ 3. ตรวจ ลชท.หลัก ═══
   if (slot.position_detail) {
     const lchtMatch = slot.position_detail.match(/ลชท\.หลัก\s*(?:สธ\.)?(\d+)/);
     if (lchtMatch && person.lcht_main) {
@@ -700,11 +745,10 @@ function checkConditions(person, slot) {
     }
   }
 
-  // 4. ตรวจเงื่อนไขตามอัตราหมายเลข 1310
+  // ═══ 4. ตรวจเงื่อนไขตามอัตราหมายเลข 1310 ═══
   const rule = TRANSFER_RULES.find(r => r.match(slot));
   if (rule) {
     for (const cond of rule.conditions) {
-      // ข้ามถ้าตรวจชั้นยศ/สายงานไปแล้ว
       if (cond.label === 'ชั้นยศ' && checks.some(c => c.label === 'ชั้นยศ')) continue;
       if (cond.label === 'สายงาน' && checks.some(c => c.label === 'สายงาน')) continue;
       const pass = cond.check(person);
@@ -719,14 +763,20 @@ function checkConditions(person, slot) {
     }
   }
 
-  // 5. ตรวจอายุราชการ (ถ้าตำแหน่งระดับ 3-4 ต้องมีอายุราชการ >= 25 ปี)
+  // ═══ 5. ตรวจอายุราชการ (ระดับ 3-4 ต้อง >= 25 ปี) ═══
   if (slot.level <= 4 && person.years_service != null) {
     const pass = person.years_service >= 25;
     checks.push({ label: 'อายุราชการ', req: '>= 25 ปี', val: person.years_service + ' ปี', pass });
   }
 
-  // 6. ตรวจอายุยศ (ถ้าตำแหน่งระดับ 3-4 ต้องมีอายุยศ >= 2 ปี)
-  if (slot.level <= 4 && person.years_in_rank != null) {
+  // ═══ 6. ตรวจอายุยศ ═══
+  if (direction === 'up') {
+    // ย้ายขึ้น: ต้องมีอายุยศ >= 3 ปี
+    if (person.years_in_rank != null) {
+      const pass = person.years_in_rank >= 3;
+      checks.push({ label: 'อายุยศ (ย้ายขึ้น)', req: '>= 3 ปี', val: person.years_in_rank + ' ปี', pass });
+    }
+  } else if (slot.level <= 4 && person.years_in_rank != null) {
     const pass = person.years_in_rank >= 2;
     checks.push({ label: 'อายุยศ', req: '>= 2 ปี', val: person.years_in_rank + ' ปี', pass });
   }
@@ -734,7 +784,7 @@ function checkConditions(person, slot) {
   const allPass = checks.length === 0 || checks.every(c => c.pass);
   const passCount = checks.filter(c => c.pass).length;
   const totalChecks = checks.length;
-  return { checks, allPass, passCount, totalChecks, rule };
+  return { checks, allPass, passCount, totalChecks, rule, blocked: false, direction };
 }
 
 // หาผู้มีคุณสมบัติเหมาะสมกับตำแหน่งว่าง
@@ -747,8 +797,15 @@ function findEligibleCandidates(slot, allData) {
     const result = checkConditions(person, slot);
     return { ...person, condResult: result };
   }).sort((a, b) => {
-    // เรียงตาม: ผ่านทั้งหมด > ผ่านมากกว่า > ผ่านน้อยกว่า
+    // blocked (ย้ายลง) อยู่ท้ายสุดเสมอ
+    if (a.condResult.blocked !== b.condResult.blocked) return a.condResult.blocked ? 1 : -1;
+    // ผ่านทั้งหมด > ผ่านมากกว่า > ผ่านน้อยกว่า
     if (b.condResult.allPass !== a.condResult.allPass) return b.condResult.allPass ? 1 : -1;
+    // ยศเท่ากัน > ย้ายขึ้น
+    if (a.condResult.direction !== b.condResult.direction) {
+      const order = { same: 0, up: 1, down: 2 };
+      return (order[a.condResult.direction] || 2) - (order[b.condResult.direction] || 2);
+    }
     return b.condResult.passCount - a.condResult.passCount;
   });
 }
@@ -1364,8 +1421,9 @@ function TransferPrepView({ data, onSelect, addToast }) {
                 const ph = person.person_id ? getPhoto(String(person.person_id)) : null;
                 const cr = person.condResult;
                 return html`
-                  <div key=${person.id} class="tp-candidate ${cr.allPass ? 'pass' : 'partial'}">
+                  <div key=${person.id} class="tp-candidate ${cr.blocked ? 'blocked' : cr.allPass ? 'pass' : 'partial'}">
                     <div class="tp-cand-left" onClick=${() => onSelect(person)}>
+                      ${cr.direction === 'up' ? html`<div class="tp-direction tp-dir-up" title="ย้ายขึ้น">^</div>` : cr.direction === 'down' ? html`<div class="tp-direction tp-dir-down" title="ห้ามย้ายลง">X</div>` : html`<div class="tp-direction tp-dir-same" title="ยศเท่ากัน">=</div>`}
                       <div class="tp-cand-avatar" style=${{ background: ph ? 'transparent' : st.color }}>
                         ${ph ? html`<img src=${ph} />` : (person.name || '?').charAt(0)}
                       </div>
@@ -1410,7 +1468,7 @@ function TransferPrepView({ data, onSelect, addToast }) {
           <h3 class="tp-panel-title">จำลองการปรับย้าย (${simulations.length} รายการ)</h3>
           <div class="tp-sim-list">
             ${simulations.map(sim => html`
-              <div key=${sim.id} class="tp-sim-item ${sim.result.allPass ? 'sim-pass' : 'sim-warn'}">
+              <div key=${sim.id} class="tp-sim-item ${sim.result.blocked ? 'sim-blocked' : sim.result.allPass ? 'sim-pass' : 'sim-warn'}">
                 <div class="tp-sim-flow">
                   <div class="tp-sim-person">
                     <strong>${sim.person.name}</strong>
@@ -1432,8 +1490,8 @@ function TransferPrepView({ data, onSelect, addToast }) {
                   `)}
                 </div>
                 <div class="tp-sim-result">
-                  <span class=${sim.result.allPass ? 'sim-result-pass' : 'sim-result-fail'}>
-                    ${sim.result.allPass ? 'ผ่านทุกเงื่อนไข' : `ไม่ผ่าน ${sim.result.totalChecks - sim.result.passCount} เงื่อนไข`}
+                  <span class=${sim.result.blocked ? 'sim-result-blocked' : sim.result.allPass ? 'sim-result-pass' : 'sim-result-fail'}>
+                    ${sim.result.blocked ? 'ห้ามย้าย (ยศสูงกว่าตำแหน่ง)' : sim.result.allPass ? 'ผ่านทุกเงื่อนไข' : `ไม่ผ่าน ${sim.result.totalChecks - sim.result.passCount} เงื่อนไข`}
                   </span>
                   <button class="tp-sim-remove" onClick=${() => removeSimulation(sim.id)}>ลบ</button>
                 </div>
