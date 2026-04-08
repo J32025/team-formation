@@ -2153,6 +2153,68 @@ body {
   border: 1px solid var(--border);
 }
 
+/* Sort bar */
+.tp-sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.tp-sort-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-right: 4px;
+}
+.tp-sort-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tp-sort-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tp-sort-btn.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* Candidate rank number */
+.tp-cand-rank-num {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: 12px; font-weight: 700;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.tp-candidate.pass .tp-cand-rank-num {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #22c55e;
+}
+
+/* Seniority info */
+.tp-cand-seniority {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.tp-cand-seniority span {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.04);
+}
+
 /* Direction indicators */
 .tp-direction {
   width: 22px; height: 22px;

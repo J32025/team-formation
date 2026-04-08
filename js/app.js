@@ -788,6 +788,20 @@ function checkConditions(person, slot) {
 }
 
 // หาผู้มีคุณสมบัติเหมาะสมกับตำแหน่งว่าง
+// คำนวณอายุตัว (ปี พ.ศ. ปัจจุบัน - ปีเกิด)
+const CURRENT_BE = new Date().getFullYear() + 543;
+function calcAge(birthBe) { return birthBe ? CURRENT_BE - birthBe : 0; }
+
+// คำนวณคะแนนอาวุโส (เรียงจากมากไปน้อย = อาวุโสมากสุดก่อน)
+function seniorityScore(person) {
+  const rankOrder = RANK_ORDER[person.rank_req] || 99;
+  const yearsService = person.years_service ?? 0;
+  const yearsInRank = person.years_in_rank ?? 0;
+  const age = calcAge(person.birth_be);
+  // ยิ่งยศสูง (เลขน้อย) = อาวุโสมาก, ยิ่งอายุราชการ/อายุยศ/อายุตัว มาก = อาวุโสมาก
+  return { rankOrder, yearsService, yearsInRank, age };
+}
+
 function findEligibleCandidates(slot, allData) {
   // ค้นหาเฉพาะคนที่มีตัวตน (บรรจุจริง/ประจำ/รรก.)
   const people = allData.filter(d =>
@@ -795,18 +809,27 @@ function findEligibleCandidates(slot, allData) {
   );
   return people.map(person => {
     const result = checkConditions(person, slot);
-    return { ...person, condResult: result };
+    const seniority = seniorityScore(person);
+    return { ...person, condResult: result, seniority };
   }).sort((a, b) => {
     // blocked (ย้ายลง) อยู่ท้ายสุดเสมอ
     if (a.condResult.blocked !== b.condResult.blocked) return a.condResult.blocked ? 1 : -1;
-    // ผ่านทั้งหมด > ผ่านมากกว่า > ผ่านน้อยกว่า
+    // ผ่านทั้งหมด > ไม่ผ่าน
     if (b.condResult.allPass !== a.condResult.allPass) return b.condResult.allPass ? 1 : -1;
-    // ยศเท่ากัน > ย้ายขึ้น
+    // ทิศทาง: ยศเท่ากัน > ย้ายขึ้น
     if (a.condResult.direction !== b.condResult.direction) {
       const order = { same: 0, up: 1, down: 2 };
       return (order[a.condResult.direction] || 2) - (order[b.condResult.direction] || 2);
     }
-    return b.condResult.passCount - a.condResult.passCount;
+    // ═══ จัดลำดับอาวุโส ═══
+    // 1. ชั้นยศ (เลขน้อย = ยศสูงกว่า = อาวุโสกว่า)
+    if (a.seniority.rankOrder !== b.seniority.rankOrder) return a.seniority.rankOrder - b.seniority.rankOrder;
+    // 2. อายุครองยศ (มากกว่า = อาวุโสกว่า)
+    if (b.seniority.yearsInRank !== a.seniority.yearsInRank) return b.seniority.yearsInRank - a.seniority.yearsInRank;
+    // 3. อายุราชการ (มากกว่า = อาวุโสกว่า)
+    if (b.seniority.yearsService !== a.seniority.yearsService) return b.seniority.yearsService - a.seniority.yearsService;
+    // 4. อายุตัว (มากกว่า = อาวุโสกว่า)
+    return b.seniority.age - a.seniority.age;
   });
 }
 
@@ -1249,6 +1272,7 @@ function TransferPrepView({ data, onSelect, addToast }) {
   const [filterDept, setFilterDept] = useState('');
   const [filterLevel, setFilterLevel] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [sortBy, setSortBy] = useState('seniority'); // seniority, age, service, rank_age
   const [simulations, setSimulations] = useState([]); // จำลองการย้าย
 
   // ตำแหน่งว่าง
@@ -1407,50 +1431,89 @@ function TransferPrepView({ data, onSelect, addToast }) {
               })()}
             </div>
 
-            <div class="tp-candidate-header">
-              <h4>ผู้มีคุณสมบัติ (${candidates.filter(c => showAll || c.condResult.allPass).length} คน)</h4>
-              <label class="tp-toggle">
-                <input type="checkbox" checked=${showAll} onChange=${e => setShowAll(e.target.checked)} />
-                แสดงทั้งหมด (${candidates.length})
-              </label>
-            </div>
+            ${(() => {
+              // กรองเฉพาะผู้ผ่านเงื่อนไข หรือทั้งหมด
+              let filtered = showAll ? candidates.filter(c => !c.condResult.blocked) : candidates.filter(c => c.condResult.allPass);
 
-            <div class="tp-candidate-list">
-              ${(showAll ? candidates : candidates.filter(c => c.condResult.allPass)).slice(0, 50).map(person => {
-                const st = getStatus(person.status);
-                const ph = person.person_id ? getPhoto(String(person.person_id)) : null;
-                const cr = person.condResult;
-                return html`
-                  <div key=${person.id} class="tp-candidate ${cr.blocked ? 'blocked' : cr.allPass ? 'pass' : 'partial'}">
-                    <div class="tp-cand-left" onClick=${() => onSelect(person)}>
-                      ${cr.direction === 'up' ? html`<div class="tp-direction tp-dir-up" title="ย้ายขึ้น">^</div>` : cr.direction === 'down' ? html`<div class="tp-direction tp-dir-down" title="ห้ามย้ายลง">X</div>` : html`<div class="tp-direction tp-dir-same" title="ยศเท่ากัน">=</div>`}
-                      <div class="tp-cand-avatar" style=${{ background: ph ? 'transparent' : st.color }}>
-                        ${ph ? html`<img src=${ph} />` : (person.name || '?').charAt(0)}
-                      </div>
-                      <div class="tp-cand-info">
-                        <div class="tp-cand-name">${person.name || '-'}</div>
-                        <div class="tp-cand-meta">
-                          ${person.rank_req || '-'} | ${person.branch || '-'} | ${person.origin || '-'} | ${person.years_service ?? '-'}ปี
+              // เรียงลำดับตาม sortBy
+              if (sortBy !== 'seniority') {
+                filtered = [...filtered].sort((a, b) => {
+                  if (sortBy === 'age') return calcAge(b.birth_be) - calcAge(a.birth_be);
+                  if (sortBy === 'service') return (b.years_service ?? 0) - (a.years_service ?? 0);
+                  if (sortBy === 'rank_age') return (b.years_in_rank ?? 0) - (a.years_in_rank ?? 0);
+                  return 0;
+                });
+              }
+
+              const qualifiedCount = candidates.filter(c => c.condResult.allPass).length;
+
+              return html`
+                <div class="tp-candidate-header">
+                  <h4>ผ่านเงื่อนไข <strong>${qualifiedCount}</strong> คน</h4>
+                  <label class="tp-toggle">
+                    <input type="checkbox" checked=${showAll} onChange=${e => setShowAll(e.target.checked)} />
+                    รวมไม่ผ่าน
+                  </label>
+                </div>
+
+                <div class="tp-sort-bar">
+                  <span class="tp-sort-label">เรียงตาม:</span>
+                  ${[
+                    ['seniority', 'อาวุโส'],
+                    ['age', 'อายุตัว'],
+                    ['service', 'อายุราชการ'],
+                    ['rank_age', 'อายุครองยศ'],
+                  ].map(([k, l]) => html`
+                    <button key=${k} class="tp-sort-btn ${sortBy === k ? 'active' : ''}"
+                      onClick=${() => setSortBy(k)}>${l}</button>
+                  `)}
+                </div>
+
+                <div class="tp-candidate-list">
+                  ${filtered.slice(0, 80).map((person, idx) => {
+                    const st = getStatus(person.status);
+                    const ph = person.person_id ? getPhoto(String(person.person_id)) : null;
+                    const cr = person.condResult;
+                    const age = calcAge(person.birth_be);
+                    return html`
+                      <div key=${person.id} class="tp-candidate ${cr.blocked ? 'blocked' : cr.allPass ? 'pass' : 'partial'}">
+                        <div class="tp-cand-rank-num">${idx + 1}</div>
+                        <div class="tp-cand-left" onClick=${() => onSelect(person)}>
+                          ${cr.direction === 'up' ? html`<div class="tp-direction tp-dir-up" title="ย้ายขึ้น">^</div>` : cr.direction === 'down' ? html`<div class="tp-direction tp-dir-down" title="ห้ามย้ายลง">X</div>` : html`<div class="tp-direction tp-dir-same" title="ยศเท่ากัน">=</div>`}
+                          <div class="tp-cand-avatar" style=${{ background: ph ? 'transparent' : st.color }}>
+                            ${ph ? html`<img src=${ph} />` : (person.name || '?').charAt(0)}
+                          </div>
+                          <div class="tp-cand-info">
+                            <div class="tp-cand-name">${person.name || '-'}</div>
+                            <div class="tp-cand-meta">
+                              ${person.rank_req || '-'} | ${person.branch || '-'} | ${person.origin || '-'}
+                            </div>
+                            <div class="tp-cand-seniority">
+                              <span title="อายุตัว">อายุ ${age || '-'}ปี</span>
+                              <span title="อายุราชการ">รับราชการ ${person.years_service ?? '-'}ปี</span>
+                              <span title="อายุครองยศ">ครองยศ ${person.years_in_rank ?? '-'}ปี</span>
+                            </div>
+                          </div>
                         </div>
-                        <div class="tp-cand-pos">${truncate(person.position, 30)}</div>
+                        <div class="tp-cand-right">
+                          <div class="tp-cond-score ${cr.allPass ? 'all-pass' : ''}">${cr.passCount}/${cr.totalChecks}</div>
+                          <div class="tp-cond-checks">
+                            ${cr.checks.map((c, i) => html`
+                              <span key=${i} class="tp-cond-dot ${c.pass ? 'pass' : 'fail'}" title="${c.label}: ${c.req} -> ${c.val}">
+                                ${c.pass ? 'v' : 'x'}
+                              </span>
+                            `)}
+                          </div>
+                          <button class="tp-sim-btn" onClick=${() => addSimulation(person, selectedSlot)} title="จำลองการย้าย">+</button>
+                        </div>
                       </div>
-                    </div>
-                    <div class="tp-cand-right">
-                      <div class="tp-cond-score ${cr.allPass ? 'all-pass' : ''}">${cr.passCount}/${cr.totalChecks}</div>
-                      <div class="tp-cond-checks">
-                        ${cr.checks.map((c, i) => html`
-                          <span key=${i} class="tp-cond-dot ${c.pass ? 'pass' : 'fail'}" title="${c.label}: ${c.req} -> ${c.val}">
-                            ${c.pass ? 'v' : 'x'}
-                          </span>
-                        `)}
-                      </div>
-                      <button class="tp-sim-btn" onClick=${() => addSimulation(person, selectedSlot)} title="จำลองการย้าย">+</button>
-                    </div>
-                  </div>
-                `;
-              })}
-              ${candidates.length === 0 ? html`<div class="tp-empty">เลือกตำแหน่งว่างจากด้านซ้าย</div>` : null}
-            </div>
+                    `;
+                  })}
+                  ${filtered.length > 80 ? html`<div class="tp-empty">แสดง 80 จาก ${filtered.length} คน</div>` : null}
+                  ${filtered.length === 0 ? html`<div class="tp-empty">ไม่พบผู้ผ่านเงื่อนไข</div>` : null}
+                </div>
+              `;
+            })()}
           ` : html`
             <div class="tp-empty-state">
               <div class="tp-empty-icon">?</div>
