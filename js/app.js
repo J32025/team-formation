@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import htm from 'htm';
-import { loadConfig, saveConfig, fetchData, saveTransfer, fetchViaCsv } from './api.js';
+import { loadConfig, saveConfig, fetchData, saveTransfer, fetchViaCsv, getApiUrl } from './api.js';
 
 const html = htm.bind(React.createElement);
 
@@ -767,8 +767,9 @@ function App() {
     setLoading(true);
     try {
       let result;
-      if (config.apiUrl) {
-        result = await fetchData(config.apiUrl);
+      const apiUrl = config.apiUrl || getApiUrl();
+      if (apiUrl) {
+        result = await fetchData(apiUrl);
         setConnected(true);
       } else if (config.sheetUrl) {
         result = await fetchViaCsv(config.sheetUrl);

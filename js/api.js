@@ -4,6 +4,12 @@
  */
 
 const STORAGE_KEY = 'team_mgmt_config';
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbzUJwL_v1OJUrWiHtEy8q8Iy4Djf--vTO6YLZE9CA_Ox5PnEBZJM4evD87c2jRqR6kq3Q/exec';
+
+export function getApiUrl() {
+  const cfg = loadConfig();
+  return cfg.apiUrl || DEFAULT_API_URL;
+}
 
 export function loadConfig() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
