@@ -1431,320 +1431,321 @@ function TransferPrepView({ data, onSelect, addToast }) {
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [candidates, setCandidates] = useState([]);
   const [filterDept, setFilterDept] = useState('');
-  const [filterLevel, setFilterLevel] = useState('');
   const [showAll, setShowAll] = useState(false);
-  const [sortBy, setSortBy] = useState('seniority'); // seniority, age, service, rank_age
-  const [simulations, setSimulations] = useState([]); // จำลองการย้าย
+  const [sortBy, setSortBy] = useState('seniority');
+  const [simulations, setSimulations] = useState([]);
+  const [searchPerson, setSearchPerson] = useState('');
+
+  // ═══ Drag & Drop State ═══
+  const [dragPerson, setDragPerson] = useState(null);
+  const [dragPos, setDragPos] = useState({ x: 0, y: 0 });
+  const [hoverSlotId, setHoverSlotId] = useState(null);
+  const [dropResult, setDropResult] = useState(null); // condition popup after drop
+
+  // Mouse move/up handlers for drag
+  useEffect(() => {
+    if (!dragPerson) return;
+    const onMove = (e) => setDragPos({ x: e.clientX, y: e.clientY });
+    const onUp = (e) => {
+      if (hoverSlotId != null) {
+        const slot = data.find(d => d.id === hoverSlotId);
+        if (slot && dragPerson) {
+          const result = checkConditions(dragPerson, slot, data);
+          setDropResult({ person: dragPerson, slot, result, x: e.clientX, y: e.clientY });
+        }
+      }
+      setDragPerson(null);
+      setHoverSlotId(null);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [dragPerson, hoverSlotId, data]);
 
   // ตำแหน่งว่าง
   const vacantSlots = useMemo(() => {
     let slots = data.filter(d => d.status === 0);
     if (filterDept) slots = slots.filter(d => String(d.pos_code).startsWith(filterDept));
-    if (filterLevel) slots = slots.filter(d => {
-      const lvl = Number(filterLevel);
-      return LEVEL_GROUPS.some(g => g.levels.includes(lvl) && g.levels.includes(d.level));
-    });
     return slots;
-  }, [data, filterDept, filterLevel]);
+  }, [data, filterDept]);
 
-  // สรุปตำแหน่งว่างตามกอง
   const vacantByDept = useMemo(() => {
     const map = {};
     data.filter(d => d.status === 0).forEach(d => {
       const dc = String(d.pos_code).substring(0, 5);
-      if (!map[dc]) map[dc] = { count: 0, slots: [] };
+      if (!map[dc]) map[dc] = { count: 0 };
       map[dc].count++;
-      map[dc].slots.push(d);
     });
     return map;
   }, [data]);
 
-  // เลือกตำแหน่งว่างแล้วหาผู้เหมาะสม
+  // เลือกตำแหน่ง -> หา candidates
   const handleSelectSlot = useCallback((slot) => {
     setSelectedSlot(slot);
     const eligible = findEligibleCandidates(slot, data);
     setCandidates(eligible);
+    setDropResult(null);
   }, [data]);
 
-  // จำลองการย้าย
-  const addSimulation = useCallback((person, slot) => {
-    const result = checkConditions(person, slot, data);
-    setSimulations(prev => [...prev, {
-      id: Date.now(),
-      person,
-      slot,
-      result,
-    }]);
-    addToast(`จำลอง: ${person.name} -> ${slot.position}`, 'info');
-  }, [addToast]);
+  // ยืนยันจำลองจาก drop popup
+  const confirmDrop = useCallback(() => {
+    if (!dropResult) return;
+    const { person, slot, result } = dropResult;
+    setSimulations(prev => [...prev, { id: Date.now(), person, slot, result }]);
+    addToast(`จำลอง: ${person.name} -> ${slot.position}`, result.allPass ? 'success' : 'info');
+    setDropResult(null);
+    // auto-select the slot to show candidates
+    handleSelectSlot(slot);
+  }, [dropResult, addToast, handleSelectSlot]);
 
   const removeSimulation = useCallback((simId) => {
     setSimulations(prev => prev.filter(s => s.id !== simId));
   }, []);
 
-  // สรุปความพร้อม
+  // คนทั้งหมดที่สามารถลากได้
+  const allPeople = useMemo(() => {
+    let people = data.filter(d => (d.status === 1 || d.status === 7 || d.status === 5) && d.name);
+    if (searchPerson) {
+      const q = searchPerson.toLowerCase();
+      people = people.filter(d => (d.name || '').toLowerCase().includes(q) || (d.rank_req || '').includes(q) || (d.corps || '').includes(q) || (d.position || '').toLowerCase().includes(q));
+    }
+    return people;
+  }, [data, searchPerson]);
+
+  // สรุป
   const readiness = useMemo(() => {
     const totalVacant = data.filter(d => d.status === 0).length;
     const totalFilled = data.filter(d => d.status === 1).length;
     const totalReserve = data.filter(d => d.status === 7 || d.status === 5).length;
-    const deptStats = Object.entries(vacantByDept).map(([dc, v]) => {
-      const info = DEPT_NAMES[dc] || { name: dc, short: dc };
-      return { ...info, code: dc, vacant: v.count };
-    }).sort((a, b) => b.vacant - a.vacant);
-    return { totalVacant, totalFilled, totalReserve, deptStats };
-  }, [data, vacantByDept]);
+    return { totalVacant, totalFilled, totalReserve };
+  }, [data]);
+
+  // hover check ระหว่างลาก
+  const hoverCheck = useMemo(() => {
+    if (!dragPerson || hoverSlotId == null) return null;
+    const slot = data.find(d => d.id === hoverSlotId);
+    if (!slot) return null;
+    return checkConditions(dragPerson, slot, data);
+  }, [dragPerson, hoverSlotId, data]);
+
+  // กรองผู้เหมาะสมเมื่อเลือกตำแหน่ง
+  const filteredCandidates = useMemo(() => {
+    if (!selectedSlot || candidates.length === 0) return [];
+    let filtered = showAll ? candidates.filter(c => !c.condResult.blocked) : candidates.filter(c => c.condResult.allPass);
+    if (sortBy !== 'seniority') {
+      filtered = [...filtered].sort((a, b) => {
+        if (sortBy === 'age') return calcAge(b.birth_be) - calcAge(a.birth_be);
+        if (sortBy === 'service') return (b.years_service ?? 0) - (a.years_service ?? 0);
+        if (sortBy === 'rank_age') return (b.years_in_rank ?? 0) - (a.years_in_rank ?? 0);
+        return 0;
+      });
+    }
+    return filtered;
+  }, [selectedSlot, candidates, showAll, sortBy]);
+
+  const startDrag = useCallback((e, person) => {
+    e.preventDefault();
+    setDragPerson(person);
+    setDragPos({ x: e.clientX, y: e.clientY });
+  }, []);
 
   return html`
-    <div class="transfer-prep">
-      <!-- Summary Cards -->
-      <div class="tp-summary">
-        <div class="tp-card tp-card-vacant">
-          <div class="tp-card-icon">!</div>
-          <div class="tp-card-body">
-            <div class="tp-card-value">${readiness.totalVacant}</div>
-            <div class="tp-card-label">ตำแหน่งว่าง</div>
-            <div class="tp-card-sub">รอบรรจุ/ปรับย้าย</div>
-          </div>
-        </div>
-        <div class="tp-card tp-card-filled">
-          <div class="tp-card-icon">O</div>
-          <div class="tp-card-body">
-            <div class="tp-card-value">${readiness.totalFilled}</div>
-            <div class="tp-card-label">บรรจุจริง</div>
-            <div class="tp-card-sub">ตัวจริงในตำแหน่ง</div>
-          </div>
-        </div>
-        <div class="tp-card tp-card-reserve">
-          <div class="tp-card-icon">R</div>
-          <div class="tp-card-body">
-            <div class="tp-card-value">${readiness.totalReserve}</div>
-            <div class="tp-card-label">ตัวสำรอง/รรก.</div>
-            <div class="tp-card-sub">พร้อมปรับย้าย</div>
-          </div>
-        </div>
-        <div class="tp-card tp-card-sim">
-          <div class="tp-card-icon">S</div>
-          <div class="tp-card-body">
-            <div class="tp-card-value">${simulations.length}</div>
-            <div class="tp-card-label">จำลองย้าย</div>
-            <div class="tp-card-sub">รายการจำลอง</div>
-          </div>
-        </div>
+    <div class="dd-container">
+      <!-- ═══ TOP BAR ═══ -->
+      <div class="dd-topbar">
+        <div class="dd-stat"><span class="dd-stat-num dd-stat-amber">${readiness.totalVacant}</span><span>ว่าง</span></div>
+        <div class="dd-stat"><span class="dd-stat-num dd-stat-green">${readiness.totalFilled}</span><span>บรรจุ</span></div>
+        <div class="dd-stat"><span class="dd-stat-num dd-stat-purple">${readiness.totalReserve}</span><span>สำรอง</span></div>
+        <div class="dd-stat"><span class="dd-stat-num dd-stat-blue">${simulations.length}</span><span>จำลอง</span></div>
+        <div class="dd-topbar-hint">ลากคนจากขวา วางลงตำแหน่งว่างซ้าย</div>
       </div>
 
-      <div class="tp-layout">
-        <!-- LEFT: ตำแหน่งว่าง -->
-        <div class="tp-panel tp-vacant-panel">
-          <h3 class="tp-panel-title">ตำแหน่งว่าง (${vacantSlots.length})</h3>
-          <div class="tp-filters">
-            <select value=${filterDept} onChange=${e => setFilterDept(e.target.value)}>
-              <option value="">ทุกกอง/สำนัก</option>
-              ${Object.entries(DEPT_NAMES).map(([k, v]) => {
-                const vc = (vacantByDept[k]?.count || 0);
-                return html`<option key=${k} value=${k}>${v.short} (${vc} ว่าง)</option>`;
-              })}
+      <!-- ═══ MAIN 3-COLUMN LAYOUT ═══ -->
+      <div class="dd-main">
+        <!-- LEFT: ตำแหน่งว่าง (DROP ZONE) -->
+        <div class="dd-left">
+          <div class="dd-panel-head">
+            <h3>ตำแหน่งว่าง</h3>
+            <select class="dd-dept-select" value=${filterDept} onChange=${e => setFilterDept(e.target.value)}>
+              <option value="">ทุกกอง</option>
+              ${Object.entries(DEPT_NAMES).map(([k, v]) => html`<option key=${k} value=${k}>${v.short} (${vacantByDept[k]?.count || 0})</option>`)}
             </select>
           </div>
-
-          <div class="tp-slot-list">
+          <div class="dd-slot-list">
             ${vacantSlots.map(slot => {
               const dc = String(slot.pos_code).substring(0, 5);
               const deptInfo = DEPT_NAMES[dc] || { short: dc };
-              const rule = TRANSFER_RULES.find(r => r.match(slot));
               const isSelected = selectedSlot?.id === slot.id;
+              const isHover = hoverSlotId === slot.id;
+              const hcPass = isHover && hoverCheck ? hoverCheck.allPass : null;
+              const simmed = simulations.some(s => s.slot.id === slot.id);
               return html`
-                <div key=${slot.id} class="tp-slot ${isSelected ? 'selected' : ''}" onClick=${() => handleSelectSlot(slot)}>
-                  <div class="tp-slot-header">
-                    <span class="tp-slot-dept">${deptInfo.short}</span>
-                    <span class="tp-slot-rank">${slot.rank_req || '-'}</span>
+                <div key=${slot.id}
+                  class="dd-slot ${isSelected ? 'sel' : ''} ${isHover ? (hcPass === false ? 'drop-bad' : 'drop-ok') : ''} ${simmed ? 'simmed' : ''}"
+                  onClick=${() => handleSelectSlot(slot)}
+                  onMouseEnter=${() => { if (dragPerson) setHoverSlotId(slot.id); }}
+                  onMouseLeave=${() => setHoverSlotId(null)}>
+                  <div class="dd-slot-dept">${deptInfo.short}</div>
+                  <div class="dd-slot-body">
+                    <div class="dd-slot-name">${truncate(slot.position, 22)}</div>
+                    <div class="dd-slot-sub">${slot.rank_req || '-'} ${slot.branch && slot.branch !== '*' ? '| ' + slot.branch : ''}</div>
                   </div>
-                  <div class="tp-slot-name">${slot.position || '-'}</div>
-                  <div class="tp-slot-meta">
-                    ${slot.branch && slot.branch !== '*' ? html`<span class="tp-tag">สาย:${slot.branch}</span>` : null}
-                    ${rule ? html`<span class="tp-tag tp-tag-rule">${rule.id}</span>` : null}
-                    ${slot.lcht_main ? html`<span class="tp-tag">ลชท:${slot.lcht_main}</span>` : null}
-                  </div>
+                  ${simmed ? html`<div class="dd-slot-check">v</div>` : null}
+                  ${isHover && hoverCheck ? html`
+                    <div class="dd-hover-badge ${hcPass ? 'ok' : 'bad'}">${hcPass ? 'ผ่าน' : 'ไม่ผ่าน'}</div>
+                  ` : null}
                 </div>
               `;
             })}
-            ${vacantSlots.length === 0 ? html`<div class="tp-empty">ไม่พบตำแหน่งว่าง</div>` : null}
           </div>
         </div>
 
-        <!-- RIGHT: ผู้เหมาะสม -->
-        <div class="tp-panel tp-candidate-panel">
+        <!-- CENTER: ผู้เหมาะสม / จำลอง -->
+        <div class="dd-center">
           ${selectedSlot ? html`
-            <div class="tp-selected-slot">
-              <h3 class="tp-panel-title">ตำแหน่ง: ${selectedSlot.position}</h3>
-              <div class="tp-slot-detail">
-                <span>ชั้นยศที่ต้องการ: <strong>${selectedSlot.rank_req || '-'}</strong></span>
-                <span>สายงาน: <strong>${selectedSlot.branch || '-'}</strong></span>
-                <span>ระดับ: <strong>${selectedSlot.level}</strong></span>
+            <div class="dd-selected-info">
+              <div class="dd-sel-title">${selectedSlot.position}</div>
+              <div class="dd-sel-req">
+                <span>ยศ: ${selectedSlot.rank_req || '-'}</span>
+                <span>สาย: ${selectedSlot.branch || '*'}</span>
+                <span>ระดับ: ${selectedSlot.level}</span>
               </div>
-              ${(() => {
-                const rule = TRANSFER_RULES.find(r => r.match(selectedSlot));
-                return rule ? html`
-                  <div class="tp-rule-info">
-                    <strong>${rule.id}: ${rule.name}</strong>
-                    <p>${rule.desc}</p>
-                  </div>
-                ` : null;
-              })()}
             </div>
-
-            ${(() => {
-              // กรองเฉพาะผู้ผ่านเงื่อนไข หรือทั้งหมด
-              let filtered = showAll ? candidates.filter(c => !c.condResult.blocked) : candidates.filter(c => c.condResult.allPass);
-
-              // เรียงลำดับตาม sortBy
-              if (sortBy !== 'seniority') {
-                filtered = [...filtered].sort((a, b) => {
-                  if (sortBy === 'age') return calcAge(b.birth_be) - calcAge(a.birth_be);
-                  if (sortBy === 'service') return (b.years_service ?? 0) - (a.years_service ?? 0);
-                  if (sortBy === 'rank_age') return (b.years_in_rank ?? 0) - (a.years_in_rank ?? 0);
-                  return 0;
-                });
-              }
-
-              const qualifiedCount = candidates.filter(c => c.condResult.allPass).length;
-
-              return html`
-                <div class="tp-candidate-header">
-                  <h4>ผ่านเงื่อนไข <strong>${qualifiedCount}</strong> คน</h4>
-                  <label class="tp-toggle">
-                    <input type="checkbox" checked=${showAll} onChange=${e => setShowAll(e.target.checked)} />
-                    รวมไม่ผ่าน
-                  </label>
-                </div>
-
-                <div class="tp-sort-bar">
-                  <span class="tp-sort-label">เรียงตาม:</span>
-                  ${[
-                    ['seniority', 'อาวุโส'],
-                    ['age', 'อายุตัว'],
-                    ['service', 'อายุราชการ'],
-                    ['rank_age', 'อายุครองยศ'],
-                  ].map(([k, l]) => html`
-                    <button key=${k} class="tp-sort-btn ${sortBy === k ? 'active' : ''}"
-                      onClick=${() => setSortBy(k)}>${l}</button>
-                  `)}
-                </div>
-
-                <div class="tp-candidate-list">
-                  ${filtered.slice(0, 80).map((person, idx) => {
-                    const st = getStatus(person.status);
-                    const ph = person.person_id ? getPhoto(String(person.person_id)) : null;
-                    const cr = person.condResult;
-                    const age = calcAge(person.birth_be);
-                    return html`
-                      <div key=${person.id} class="tp-candidate ${cr.blocked ? 'blocked' : cr.allPass ? 'pass' : 'partial'}">
-                        <div class="tp-cand-rank-num">${idx + 1}</div>
-                        <div class="tp-cand-left" onClick=${() => onSelect(person)}>
-                          ${cr.direction === 'up' ? html`<div class="tp-direction tp-dir-up" title="ย้ายขึ้น">^</div>` : cr.direction === 'down' ? html`<div class="tp-direction tp-dir-down" title="ห้ามย้ายลง">X</div>` : html`<div class="tp-direction tp-dir-same" title="ยศเท่ากัน">=</div>`}
-                          <div class="tp-cand-avatar" style=${{ background: ph ? 'transparent' : st.color }}>
-                            ${ph ? html`<img src=${ph} />` : (person.name || '?').charAt(0)}
-                          </div>
-                          <div class="tp-cand-info">
-                            <div class="tp-cand-name">${person.name || '-'}</div>
-                            <div class="tp-cand-meta">
-                              ${person.rank_req || '-'} | ${person.corps ? 'เหล่า ' + person.corps : '-'} | ${person.origin || '-'}
-                            </div>
-                            <div class="tp-cand-seniority">
-                              <span title="อายุตัว">อายุ ${age || '-'}ปี</span>
-                              <span title="อายุราชการ">รับราชการ ${person.years_service ?? '-'}ปี</span>
-                              <span title="อายุครองยศ">ครองยศ ${person.years_in_rank ?? '-'}ปี</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div class="tp-cand-right">
-                          <div class="tp-cond-score ${cr.allPass ? 'all-pass' : ''}">${cr.passCount}/${cr.totalChecks}</div>
-                          <div class="tp-cond-checks">
-                            ${cr.checks.map((c, i) => html`
-                              <span key=${i} class="tp-cond-dot ${c.pass ? 'pass' : 'fail'}" title="${c.label}: ${c.req} -> ${c.val}">
-                                ${c.pass ? 'v' : 'x'}
-                              </span>
-                            `)}
-                          </div>
-                          <button class="tp-sim-btn" onClick=${() => addSimulation(person, selectedSlot)} title="จำลองการย้าย">+</button>
-                        </div>
-                      </div>
-                    `;
-                  })}
-                  ${filtered.length > 80 ? html`<div class="tp-empty">แสดง 80 จาก ${filtered.length} คน</div>` : null}
-                  ${filtered.length === 0 ? html`<div class="tp-empty">ไม่พบผู้ผ่านเงื่อนไข</div>` : null}
-                </div>
-              `;
-            })()}
+            <div class="dd-center-tabs">
+              <div class="dd-sort-row">
+                <span class="dd-sort-label">ผ่านเงื่อนไข ${candidates.filter(c => c.condResult.allPass).length} คน | เรียง:</span>
+                ${[['seniority','อาวุโส'],['age','อายุ'],['service','ราชการ'],['rank_age','ครองยศ']].map(([k,l]) => html`
+                  <button key=${k} class="dd-sort-btn ${sortBy === k ? 'on' : ''}" onClick=${() => setSortBy(k)}>${l}</button>
+                `)}
+                <label class="dd-show-all"><input type="checkbox" checked=${showAll} onChange=${e => setShowAll(e.target.checked)} /> รวมไม่ผ่าน</label>
+              </div>
+            </div>
+            <div class="dd-match-list">
+              ${filteredCandidates.slice(0, 60).map((p, idx) => {
+                const ph = p.person_id ? getPhoto(String(p.person_id)) : null;
+                const cr = p.condResult;
+                const age = calcAge(p.birth_be);
+                return html`
+                  <div key=${p.id} class="dd-match ${cr.allPass ? 'ok' : 'warn'}"
+                    onMouseDown=${(e) => startDrag(e, p)}>
+                    <div class="dd-match-num">${idx + 1}</div>
+                    <div class="dd-match-avatar" style=${{ background: ph ? 'transparent' : (cr.allPass ? '#22c55e' : '#f59e0b') }}>
+                      ${ph ? html`<img src=${ph} />` : (p.name || '?').charAt(0)}
+                    </div>
+                    <div class="dd-match-info">
+                      <div class="dd-match-name">${p.name}</div>
+                      <div class="dd-match-meta">${p.rank_req} | ${p.corps ? p.corps : '-'} | ${p.origin || '-'}</div>
+                      <div class="dd-match-sen">อายุ ${age}ปี  ราชการ ${p.years_service ?? '-'}ปี  ครองยศ ${p.years_in_rank ?? '-'}ปี</div>
+                    </div>
+                    <div class="dd-match-score ${cr.allPass ? 'pass' : ''}">${cr.passCount}/${cr.totalChecks}</div>
+                  </div>
+                `;
+              })}
+              ${filteredCandidates.length === 0 ? html`<div class="dd-empty">ไม่พบผู้ผ่านเงื่อนไข</div>` : null}
+            </div>
           ` : html`
-            <div class="tp-empty-state">
-              <div class="tp-empty-icon">?</div>
-              <h3>เลือกตำแหน่งว่าง</h3>
-              <p>คลิกตำแหน่งว่างจากด้านซ้ายเพื่อดูผู้มีคุณสมบัติเหมาะสม</p>
-              <p style=${{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>อ้างอิงเงื่อนไขจากอัตราหมายเลข 1310 ยก.ทหาร</p>
+            <div class="dd-empty-center">
+              <div class="dd-empty-arrow">${'◀◀'}</div>
+              <p>เลือกตำแหน่งว่างจากซ้าย<br/>เพื่อดูผู้เหมาะสมและลากวาง</p>
             </div>
           `}
         </div>
+
+        <!-- RIGHT: กำลังพลทั้งหมด (DRAG SOURCE) -->
+        <div class="dd-right">
+          <div class="dd-panel-head">
+            <h3>กำลังพล (${allPeople.length})</h3>
+          </div>
+          <div class="dd-search-box">
+            <input placeholder="ค้นชื่อ, ยศ, เหล่า, ตำแหน่ง..." value=${searchPerson} onInput=${e => setSearchPerson(e.target.value)} />
+          </div>
+          <div class="dd-people-list">
+            ${allPeople.slice(0, 100).map(p => {
+              const st = getStatus(p.status);
+              const ph = p.person_id ? getPhoto(String(p.person_id)) : null;
+              const isDragging = dragPerson?.id === p.id;
+              return html`
+                <div key=${p.id} class="dd-person ${isDragging ? 'dragging' : ''} ${st.cls}"
+                  onMouseDown=${(e) => startDrag(e, p)}
+                  onClick=${() => { if (!dragPerson) onSelect(p); }}>
+                  <div class="dd-person-avatar" style=${{ background: ph ? 'transparent' : st.color }}>
+                    ${ph ? html`<img src=${ph} />` : (p.name || '?').charAt(0)}
+                  </div>
+                  <div class="dd-person-info">
+                    <div class="dd-person-name">${truncate(p.name, 18)}</div>
+                    <div class="dd-person-sub">${p.rank_req} ${p.corps ? '| ' + p.corps : ''}</div>
+                  </div>
+                  <div class="dd-person-status" style=${{ background: st.color + '22', color: st.color }}>${st.label.charAt(0)}</div>
+                </div>
+              `;
+            })}
+          </div>
+        </div>
       </div>
 
-      <!-- Simulation Panel -->
+      <!-- ═══ SIMULATION STRIP (bottom) ═══ -->
       ${simulations.length > 0 ? html`
-        <div class="tp-sim-panel">
-          <h3 class="tp-panel-title">จำลองการปรับย้าย (${simulations.length} รายการ)</h3>
-          <div class="tp-sim-list">
+        <div class="dd-sim-strip">
+          <div class="dd-sim-title">จำลองย้าย (${simulations.length})</div>
+          <div class="dd-sim-items">
             ${simulations.map(sim => html`
-              <div key=${sim.id} class="tp-sim-item ${sim.result.blocked ? 'sim-blocked' : sim.result.allPass ? 'sim-pass' : 'sim-warn'}">
-                <div class="tp-sim-flow">
-                  <div class="tp-sim-person">
-                    <strong>${sim.person.name}</strong>
-                    <span>${sim.person.rank_req} | ${sim.person.position}</span>
-                  </div>
-                  <div class="tp-sim-arrow">>></div>
-                  <div class="tp-sim-target">
-                    <strong>${sim.slot.position}</strong>
-                    <span>ต้องการ: ${sim.slot.rank_req}</span>
-                  </div>
-                </div>
-                <div class="tp-sim-checks">
-                  ${sim.result.checks.map((c, i) => html`
-                    <div key=${i} class="tp-sim-check ${c.pass ? 'pass' : 'fail'}">
-                      <span class="tp-sim-check-icon">${c.pass ? 'v' : 'x'}</span>
-                      <span>${c.label}: ${c.req}</span>
-                      <span class="tp-sim-check-val">${c.val}</span>
-                    </div>
-                  `)}
-                </div>
-                <div class="tp-sim-result">
-                  <span class=${sim.result.blocked ? 'sim-result-blocked' : sim.result.allPass ? 'sim-result-pass' : 'sim-result-fail'}>
-                    ${sim.result.blocked ? 'ห้ามย้าย (ยศสูงกว่าตำแหน่ง)' : sim.result.allPass ? 'ผ่านทุกเงื่อนไข' : `ไม่ผ่าน ${sim.result.totalChecks - sim.result.passCount} เงื่อนไข`}
-                  </span>
-                  <button class="tp-sim-remove" onClick=${() => removeSimulation(sim.id)}>ลบ</button>
-                </div>
+              <div key=${sim.id} class="dd-sim-card ${sim.result.allPass ? 'ok' : sim.result.blocked ? 'bad' : 'warn'}">
+                <div class="dd-sim-from">${truncate(sim.person.name, 12)}</div>
+                <div class="dd-sim-arrow-sm">${'▶▶'}</div>
+                <div class="dd-sim-to">${truncate(sim.slot.position, 14)}</div>
+                <div class="dd-sim-badge">${sim.result.allPass ? 'v' : sim.result.blocked ? 'X' : sim.result.passCount + '/' + sim.result.totalChecks}</div>
+                <button class="dd-sim-del" onClick=${() => removeSimulation(sim.id)}>x</button>
               </div>
             `)}
           </div>
         </div>
       ` : null}
 
-      <!-- Transfer Rules Reference -->
-      <div class="tp-rules-ref">
-        <h3 class="tp-panel-title">เงื่อนไขการปรับย้าย (อัตราหมายเลข 1310)</h3>
-        <div class="tp-rules-grid">
-          ${TRANSFER_RULES.map(rule => html`
-            <div key=${rule.id} class="tp-rule-card">
-              <div class="tp-rule-id">${rule.id}</div>
-              <div class="tp-rule-body">
-                <div class="tp-rule-name">${rule.name}</div>
-                <div class="tp-rule-desc">${rule.desc}</div>
-                <div class="tp-rule-conds">
-                  ${rule.conditions.map((c, i) => html`
-                    <span key=${i} class="tp-rule-cond">${c.label}: ${c.req}</span>
-                  `)}
-                </div>
+      <!-- ═══ DRAG GHOST ═══ -->
+      ${dragPerson ? html`
+        <div class="dd-ghost" style=${{ left: dragPos.x + 12 + 'px', top: dragPos.y - 16 + 'px' }}>
+          <strong>${truncate(dragPerson.name, 14)}</strong>
+          <span>${dragPerson.rank_req}</span>
+        </div>
+      ` : null}
+
+      <!-- ═══ DROP RESULT POPUP ═══ -->
+      ${dropResult ? html`
+        <div class="dd-drop-overlay" onClick=${() => setDropResult(null)}>
+          <div class="dd-drop-popup" onClick=${(e) => e.stopPropagation()}>
+            <div class="dd-drop-header ${dropResult.result.allPass ? 'ok' : dropResult.result.blocked ? 'bad' : 'warn'}">
+              ${dropResult.result.blocked ? 'ห้ามย้าย' : dropResult.result.allPass ? 'ผ่านทุกเงื่อนไข' : 'ไม่ผ่านบางเงื่อนไข'}
+            </div>
+            <div class="dd-drop-flow">
+              <div class="dd-drop-person">
+                <strong>${dropResult.person.name}</strong>
+                <span>${dropResult.person.rank_req} | ${dropResult.person.corps || '-'}</span>
+              </div>
+              <div class="dd-drop-arrow">${'▶▶'}</div>
+              <div class="dd-drop-slot">
+                <strong>${dropResult.slot.position}</strong>
+                <span>ต้องการ: ${dropResult.slot.rank_req}</span>
               </div>
             </div>
-          `)}
+            <div class="dd-drop-checks">
+              ${dropResult.result.checks.map((c, i) => html`
+                <div key=${i} class="dd-drop-check ${c.pass ? 'ok' : 'fail'}">
+                  <span class="dd-check-icon">${c.pass ? 'v' : 'x'}</span>
+                  <span class="dd-check-label">${c.label}</span>
+                  <span class="dd-check-req">${c.req}</span>
+                  <span class="dd-check-val">${typeof c.val === 'string' ? truncate(c.val, 20) : c.val}</span>
+                </div>
+              `)}
+            </div>
+            <div class="dd-drop-actions">
+              <button class="dd-btn-confirm" onClick=${confirmDrop}>
+                ${dropResult.result.allPass ? 'ยืนยันจำลอง' : 'จำลองถึงแม้ไม่ผ่าน'}
+              </button>
+              <button class="dd-btn-cancel" onClick=${() => setDropResult(null)}>ยกเลิก</button>
+            </div>
+          </div>
         </div>
-      </div>
+      ` : null}
     </div>
   `;
 }
