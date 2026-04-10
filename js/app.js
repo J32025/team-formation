@@ -575,8 +575,8 @@ function DataTable({ data, onSelect, searchText, setSearchText, filterStatus, se
                   <td><span class="status-badge ${st.cls}"><span class="status-dot"></span>${st.label}</span></td>
                   <td>${d.level}</td>
                   <td>${d.origin || '-'}</td>
-                  <td>${d.years_service ?? '-'}</td>
-                  <td>${d.years_in_rank ?? '-'}</td>
+                  <td>${calcYearsService(d) ?? '-'}</td>
+                  <td>${calcYearsInRank(d) ?? '-'}</td>
                 </tr>
               `;
             })}
@@ -640,10 +640,36 @@ function DetailModal({ person, onClose }) {
               <div class="detail-item"><div class="detail-label">การศึกษา</div><div class="detail-value">${person.education || '-'}</div></div>
               <div class="detail-item"><div class="detail-label">ลชท.หลัก</div><div class="detail-value">${person.lcht_main ?? '-'}</div></div>
               <div class="detail-item"><div class="detail-label">ลชท.ทั่วไป</div><div class="detail-value">${person.lcht_gen ?? '-'}</div></div>
-              <div class="detail-item"><div class="detail-label">เข้ารับราชการ (พ.ศ.)</div><div class="detail-value">${person.entry_be ?? '-'}</div></div>
-              <div class="detail-item"><div class="detail-label">อายุราชการ (ปี)</div><div class="detail-value">${person.years_service ?? '-'}</div></div>
-              <div class="detail-item"><div class="detail-label">ปีเกิด (พ.ศ.)</div><div class="detail-value">${person.birth_be ?? '-'}</div></div>
-              <div class="detail-item"><div class="detail-label">อายุยศ (ปี)</div><div class="detail-value">${person.years_in_rank ?? '-'}</div></div>
+              <div class="detail-item">
+                <div class="detail-label">วันที่ติดยศล่าสุด</div>
+                <div class="detail-value">${person.rank_date ? formatThaiDate(person.rank_date) : '(ไม่มีข้อมูล)'}</div>
+              </div>
+              <div class="detail-item">
+                <div class="detail-label">อายุยศ ${person.rank_date ? '' : '(จากตัวเลขเดิม)'}</div>
+                <div class="detail-value">${(() => {
+                  const d = calcYearsInRankDetailed(person);
+                  if (!d) return '-';
+                  return d.exact
+                    ? `${d.years} ปี ${d.months} เดือน`
+                    : `${d.years} ปี (~)`;
+                })()}</div>
+              </div>
+              <div class="detail-item">
+                <div class="detail-label">วันบรรจุ</div>
+                <div class="detail-value">${person.entry_date ? formatThaiDate(person.entry_date) : (person.entry_be ? 'พ.ศ. ' + person.entry_be + ' (~)' : '-')}</div>
+              </div>
+              <div class="detail-item">
+                <div class="detail-label">อายุราชการ ${person.entry_date ? '' : '(~)'}</div>
+                <div class="detail-value">${(calcYearsService(person) ?? '-') + ' ปี'}</div>
+              </div>
+              <div class="detail-item">
+                <div class="detail-label">วันเกิด</div>
+                <div class="detail-value">${person.birth_date ? formatThaiDate(person.birth_date) : (person.birth_be ? 'พ.ศ. ' + person.birth_be + ' (~)' : '-')}</div>
+              </div>
+              <div class="detail-item">
+                <div class="detail-label">อายุตัว ${person.birth_date ? '' : '(~)'}</div>
+                <div class="detail-value">${calcAge(person) + ' ปี'}</div>
+              </div>
             ` : null}
           </div>
         </div>
@@ -764,21 +790,25 @@ function checkConditions(person, slot, allData) {
   }
 
   // ═══ 5. ตรวจอายุราชการ (ระดับ 3-4 ต้อง >= 25 ปี) ═══
-  if (slot.level <= 4 && person.years_service != null) {
-    const pass = person.years_service >= 25;
-    checks.push({ label: 'อายุราชการ', req: '>= 25 ปี', val: person.years_service + ' ปี', pass });
+  // ใช้ entry_date ก่อน ถ้าไม่มีค่อย fallback ไป years_service
+  const yrsService = calcYearsService(person);
+  if (slot.level <= 4 && yrsService != null) {
+    const pass = yrsService >= 25;
+    checks.push({ label: 'อายุราชการ', req: '>= 25 ปี', val: yrsService + ' ปี', pass });
   }
 
-  // ═══ 6. ตรวจอายุยศ ═══
+  // ═══ 6. ตรวจอายุยศ (นับจาก rank_date) ═══
+  // ใช้ rank_date ก่อน ถ้าไม่มีค่อย fallback ไป years_in_rank
+  const yrsInRank = calcYearsInRank(person);
   if (direction === 'up') {
     // ย้ายขึ้น: ต้องมีอายุยศ >= 3 ปี
-    if (person.years_in_rank != null) {
-      const pass = person.years_in_rank >= 3;
-      checks.push({ label: 'อายุยศ (ย้ายขึ้น)', req: '>= 3 ปี', val: person.years_in_rank + ' ปี', pass });
+    if (yrsInRank != null) {
+      const pass = yrsInRank >= 3;
+      checks.push({ label: 'อายุยศ (ย้ายขึ้น)', req: '>= 3 ปี', val: yrsInRank + ' ปี', pass });
     }
-  } else if (slot.level <= 4 && person.years_in_rank != null) {
-    const pass = person.years_in_rank >= 2;
-    checks.push({ label: 'อายุยศ', req: '>= 2 ปี', val: person.years_in_rank + ' ปี', pass });
+  } else if (slot.level <= 4 && yrsInRank != null) {
+    const pass = yrsInRank >= 2;
+    checks.push({ label: 'อายุยศ', req: '>= 2 ปี', val: yrsInRank + ' ปี', pass });
   }
 
   // ═══ 7. ตรวจเหล่า (corps) — ลชท.หลัก/ลชท.รอง ต้องตรงกับเหล่าที่ตำแหน่งต้องการ ═══
@@ -949,18 +979,103 @@ function checkCorpsMatch(person, requiredCorps) {
   return { pass: false, reason: `ไม่มี ลชท. ตรงกับเหล่า ${requiredCorps}` };
 }
 
-// คำนวณอายุตัว (ปี พ.ศ. ปัจจุบัน - ปีเกิด)
+// ══════════════════════════════════════════════════════
+//  DATE HELPERS — Date-first with numeric fallback
+//  คอลัมน์ใหม่ (YYYY-MM-DD): rank_date, entry_date, birth_date
+//  คอลัมน์เดิม (ตัวเลข):     years_in_rank, years_service, birth_be
+// ══════════════════════════════════════════════════════
 const CURRENT_BE = new Date().getFullYear() + 543;
-function calcAge(birthBe) { return birthBe ? CURRENT_BE - birthBe : 0; }
+const NOW_MS = Date.now();
+
+// แปลง "YYYY-MM-DD" (ค.ศ.) หรือ Date ให้เป็น timestamp
+function parseDate(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val.getTime();
+  if (typeof val === 'number') return val;  // already ms
+  // ISO string
+  const s = String(val).trim();
+  if (!s) return null;
+  const t = Date.parse(s);
+  return isNaN(t) ? null : t;
+}
+
+// คำนวณจำนวนปี (เศษทศนิยม) ระหว่างสองช่วงเวลา
+function diffYears(fromMs, toMs) {
+  if (!fromMs) return null;
+  return (toMs - fromMs) / (365.2425 * 86400000);
+}
+
+// ── อายุตัว (อายุบุคคล) ──
+// ใช้ birth_date ก่อน, ถ้าไม่มีค่อย fallback ไป birth_be
+function calcAge(personOrBirthBe) {
+  // backward-compat: รับค่าเป็นเลข birth_be ตรงๆ ก็ได้
+  if (typeof personOrBirthBe === 'number') {
+    return personOrBirthBe ? CURRENT_BE - personOrBirthBe : 0;
+  }
+  const p = personOrBirthBe || {};
+  const ms = parseDate(p.birth_date);
+  if (ms) return Math.floor(diffYears(ms, NOW_MS));
+  return p.birth_be ? CURRENT_BE - p.birth_be : 0;
+}
+
+// ── อายุครองยศ (นับจากวันติดยศล่าสุด) ──
+function calcYearsInRank(person) {
+  const p = person || {};
+  const ms = parseDate(p.rank_date);
+  if (ms) {
+    const y = diffYears(ms, NOW_MS);
+    return y >= 0 ? Math.floor(y) : 0;
+  }
+  return p.years_in_rank ?? null;
+}
+
+// ── อายุราชการ (นับจากวันบรรจุ) ──
+function calcYearsService(person) {
+  const p = person || {};
+  const ms = parseDate(p.entry_date);
+  if (ms) {
+    const y = diffYears(ms, NOW_MS);
+    return y >= 0 ? Math.floor(y) : 0;
+  }
+  return p.years_service ?? null;
+}
+
+// ── อายุครองยศ + เศษเดือน (สำหรับแสดงผลแบบละเอียด) ──
+function calcYearsInRankDetailed(person) {
+  const p = person || {};
+  const ms = parseDate(p.rank_date);
+  if (ms) {
+    const totalDays = (NOW_MS - ms) / 86400000;
+    if (totalDays < 0) return { years: 0, months: 0, days: 0, exact: true };
+    const years = Math.floor(totalDays / 365.2425);
+    const remDays = totalDays - years * 365.2425;
+    const months = Math.floor(remDays / 30.4375);
+    const days = Math.floor(remDays - months * 30.4375);
+    return { years, months, days, exact: true };
+  }
+  const y = p.years_in_rank;
+  return y != null ? { years: y, months: 0, days: 0, exact: false } : null;
+}
+
+// รูปแบบวันที่ไทย "1 ต.ค. 2562"
+const TH_MONTH = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+function formatThaiDate(val) {
+  const ms = parseDate(val);
+  if (!ms) return '-';
+  const d = new Date(ms);
+  return `${d.getDate()} ${TH_MONTH[d.getMonth()]} ${d.getFullYear() + 543}`;
+}
 
 // คำนวณคะแนนอาวุโส (เรียงจากมากไปน้อย = อาวุโสมากสุดก่อน)
 function seniorityScore(person) {
   const rankOrder = RANK_ORDER[person.rank_req] || 99;
-  const yearsService = person.years_service ?? 0;
-  const yearsInRank = person.years_in_rank ?? 0;
-  const age = calcAge(person.birth_be);
+  const yearsService = calcYearsService(person) ?? 0;
+  const yearsInRank = calcYearsInRank(person) ?? 0;
+  const age = calcAge(person);
   // ยิ่งยศสูง (เลขน้อย) = อาวุโสมาก, ยิ่งอายุราชการ/อายุยศ/อายุตัว มาก = อาวุโสมาก
-  return { rankOrder, yearsService, yearsInRank, age };
+  // tie-breaker สุดท้ายใช้ rank_date (ติดยศก่อน = อาวุโสกว่า)
+  const rankDateMs = parseDate(person.rank_date) || Infinity;
+  return { rankOrder, yearsService, yearsInRank, age, rankDateMs };
 }
 
 function findEligibleCandidates(slot, allData) {
@@ -985,11 +1100,13 @@ function findEligibleCandidates(slot, allData) {
     // ═══ จัดลำดับอาวุโส ═══
     // 1. ชั้นยศ (เลขน้อย = ยศสูงกว่า = อาวุโสกว่า)
     if (a.seniority.rankOrder !== b.seniority.rankOrder) return a.seniority.rankOrder - b.seniority.rankOrder;
-    // 2. อายุครองยศ (มากกว่า = อาวุโสกว่า)
+    // 2. อายุครองยศ (นับจาก rank_date) — มากกว่า = อาวุโสกว่า
     if (b.seniority.yearsInRank !== a.seniority.yearsInRank) return b.seniority.yearsInRank - a.seniority.yearsInRank;
-    // 3. อายุราชการ (มากกว่า = อาวุโสกว่า)
+    // 3. วันติดยศก่อน (rank_date น้อย = ติดยศก่อน = อาวุโสกว่า)
+    if (a.seniority.rankDateMs !== b.seniority.rankDateMs) return a.seniority.rankDateMs - b.seniority.rankDateMs;
+    // 4. อายุราชการ (มากกว่า = อาวุโสกว่า)
     if (b.seniority.yearsService !== a.seniority.yearsService) return b.seniority.yearsService - a.seniority.yearsService;
-    // 4. อายุตัว (มากกว่า = อาวุโสกว่า)
+    // 5. อายุตัว (มากกว่า = อาวุโสกว่า)
     return b.seniority.age - a.seniority.age;
   });
 }
@@ -1534,9 +1651,16 @@ function TransferPrepView({ data, onSelect, addToast }) {
     let filtered = showAll ? candidates.filter(c => !c.condResult.blocked) : candidates.filter(c => c.condResult.allPass);
     if (sortBy !== 'seniority') {
       filtered = [...filtered].sort((a, b) => {
-        if (sortBy === 'age') return calcAge(b.birth_be) - calcAge(a.birth_be);
-        if (sortBy === 'service') return (b.years_service ?? 0) - (a.years_service ?? 0);
-        if (sortBy === 'rank_age') return (b.years_in_rank ?? 0) - (a.years_in_rank ?? 0);
+        if (sortBy === 'age') return calcAge(b) - calcAge(a);
+        if (sortBy === 'service') return (calcYearsService(b) ?? 0) - (calcYearsService(a) ?? 0);
+        if (sortBy === 'rank_age') {
+          // อายุยศมาก > อายุยศน้อย; tie-breaker = rank_date เก่ากว่า
+          const ya = calcYearsInRank(a) ?? 0, yb = calcYearsInRank(b) ?? 0;
+          if (ya !== yb) return yb - ya;
+          const da = parseDate(a.rank_date) || Infinity;
+          const db = parseDate(b.rank_date) || Infinity;
+          return da - db;
+        }
         return 0;
       });
     }
@@ -1624,10 +1748,16 @@ function TransferPrepView({ data, onSelect, addToast }) {
               ${filteredCandidates.slice(0, 60).map((p, idx) => {
                 const ph = p.person_id ? getPhoto(String(p.person_id)) : null;
                 const cr = p.condResult;
-                const age = calcAge(p.birth_be);
+                const age = calcAge(p);
+                const ageApprox = !p.birth_date;  // ไม่มีวันเกิดจริง = ประมาณ
+                const yrSrv = calcYearsService(p);
+                const yrRank = calcYearsInRank(p);
+                const rankDetail = calcYearsInRankDetailed(p);
+                const rankDateStr = p.rank_date ? formatThaiDate(p.rank_date) : null;
                 return html`
                   <div key=${p.id} class="dd-match ${cr.allPass ? 'ok' : 'warn'}"
-                    onMouseDown=${(e) => startDrag(e, p)}>
+                    onMouseDown=${(e) => startDrag(e, p)}
+                    title=${rankDateStr ? ('ติดยศ ' + rankDateStr) : ''}>
                     <div class="dd-match-num">${idx + 1}</div>
                     <div class="dd-match-avatar" style=${{ background: ph ? 'transparent' : (cr.allPass ? '#22c55e' : '#f59e0b') }}>
                       ${ph ? html`<img src=${ph} />` : (p.name || '?').charAt(0)}
@@ -1635,7 +1765,10 @@ function TransferPrepView({ data, onSelect, addToast }) {
                     <div class="dd-match-info">
                       <div class="dd-match-name">${p.name}</div>
                       <div class="dd-match-meta">${p.rank_req} | ${p.corps ? p.corps : '-'} | ${p.origin || '-'}</div>
-                      <div class="dd-match-sen">อายุ ${age}ปี  ราชการ ${p.years_service ?? '-'}ปี  ครองยศ ${p.years_in_rank ?? '-'}ปี</div>
+                      <div class="dd-match-sen">
+                        อายุ ${ageApprox ? '~' : ''}${age}ปี  ราชการ ${yrSrv ?? '-'}ปี  ครองยศ ${yrRank ?? '-'}ปี
+                        ${rankDateStr ? html`<span class="dd-rank-date"> · ติดยศ ${rankDateStr}</span>` : null}
+                      </div>
                     </div>
                     <div class="dd-match-score ${cr.allPass ? 'pass' : ''}">${cr.passCount}/${cr.totalChecks}</div>
                   </div>
